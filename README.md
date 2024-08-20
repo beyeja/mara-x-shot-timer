@@ -6,7 +6,18 @@
 - written for ESP32C3
 - needs ArduinoOTA Dependency
 - 3d printed case will be added later
-- mention secrets file
+
+## initial setup
+
+- initial upload to devboard needs to happen via usb
+- add WIFI credentials to code
+  - add `secrets.h` file and add the following:
+  ```C++
+  #define WIFI_SSID "your wifi name/ssid"
+  #define WIFI_PW "your wifi password"
+  #define OTA_PW "your password for OTA updates"
+  ```
+  - alternatively you can add your credentials directly in timer.ino but be sure to not commit them to git
 
 ## features
 
