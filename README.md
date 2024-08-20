@@ -1,5 +1,17 @@
 # mara x shot timer
 
+## features
+
+- show machine boiler and brew water temps
+- shows machine heating mode
+- auto start of timer
+- milliseconds timer when brewing
+- showing of last shot time
+- standby mode for display (to avoid oled burnin and stuff...)
+  - sleep countdown starts when machine stops sending messages
+- OTA updates
+- case for sticking to back of machine
+
 ## notes
 
 - fork and rewrite of https://github.com/alexrus/marax_timer
@@ -18,12 +30,6 @@
   #define OTA_PW "your password for OTA updates"
   ```
   - alternatively you can add your credentials directly in timer.ino but be sure to not commit them to git
-
-## features
-
-- OTA updates
-- standby mode for display (oled burnin and stuff...)
-- milliseconds timer when brewing
 
 ## Hardware
 
