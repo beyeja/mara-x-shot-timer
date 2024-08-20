@@ -18,14 +18,14 @@
 
 The following hardware is needed:
 
-- ESP32C3 (or other but then you have to do )
+- ESP32C3 (or similar others)
   - can be adjusted for other boards by changing pins
 - 1.3" OLED display (sh1106)
   - or other similar screens but library needs to be adjusted
 - Reed sensor
   - Normally closed and normally opened works
 - Wires
-- 3D printed case
+- 3D printed case (see 3dmodels folder for files or design your own)
 
 ## wiring
 
