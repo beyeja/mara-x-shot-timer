@@ -1,4 +1,5 @@
 #include <ArduinoOTA.h>
+#include <ArduinoHA.h>
 
 #define D5 (21)                       // machine bus pin
 #define D6 (20)                       // machine bus pin
@@ -27,6 +28,8 @@
 #include <ArduinoOTA.h>  // For enabling over-the-air updates
 #include <WiFi.h>        // For connecting ESP32 to WiFi
 
+WiFiClient client;
+
 #include "secrets.h"  // your secrets for wifi connection
 #include "coffeeAnimation.h"
 #include "wifiIcon.h"
@@ -40,6 +43,15 @@ Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, 
 // Adafruit_SH1106  display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 SoftwareSerial machineSerialInput(D5, D6);
 Timer t;
+HADevice device;
+HAMqtt mqtt(client, device);
+HASensor mqttTemperature("temperature");
+HASensor mqttSteamTemp("steamTemp");
+HASensor mqttLastShotTime("lastShotTime");
+HASensor mqttPumpSensor("pumpSensor");
+HASensor mqttHeating("heating");
+HASensor mqttHeatingBoost("heatingBoost");
+HASensor mqttMachineMode("machineMode");
 
 // main states
 int pumpOn = 0;                   // is pump on
@@ -66,6 +78,20 @@ char receivedChars[numChars];
 static byte ndx = 0;
 const char endMarker = '\n';
 
+void onMqttConnected() {
+  Serial.println("MQTT connected!");
+}
+
+void publishMQTTState() {
+  mqttTemperature.setValue(temp.c_str());
+  mqttSteamTemp.setValue(steamTemp.c_str());
+  mqttLastShotTime.setValue(String(lastShotTimeSec).c_str());
+  mqttPumpSensor.setValue(pumpOn ? "ON" : "OFF");
+  mqttHeating.setValue(isHeating ? "ON" : "OFF");
+  mqttHeatingBoost.setValue(isHeatingBoost ? "ON" : "OFF");
+  mqttMachineMode.setValue(coffeeSteamMode.c_str());
+}
+
 
 void setup() {
   // Serial logging connection
@@ -90,6 +116,42 @@ void setup() {
   ArduinoOTA.setHostname("esp-lelit-mara-timer");
   ArduinoOTA.setPassword(otaPassword);
 
+  // setup MQTT
+  byte uniqueId[] = { 'e', 's', 'p', '-', 'm', 'a', 'r', 'a', '-', 't', 'i', 'm', 'e', 'r' };
+  device.setUniqueId(uniqueId, sizeof(uniqueId));
+  device.setName("Lelit Mara X Timer");
+  device.setSoftwareVersion("1.0.0");
+  device.setModel("ESP32");
+
+  mqttTemperature.setName("Temperature");
+  mqttTemperature.setUnitOfMeasurement("C");
+  
+  mqttSteamTemp.setName("Steam Temperature");
+  mqttSteamTemp.setUnitOfMeasurement("C");
+  
+  mqttLastShotTime.setName("Last Shot Time");
+  mqttLastShotTime.setUnitOfMeasurement("s");
+  
+  mqttPumpSensor.setName("Pump On");
+  mqttPumpSensor.setIcon("mdi:water");
+  
+  mqttHeating.setName("Heating");
+  mqttHeating.setIcon("mdi:thermometer");
+  
+  mqttHeatingBoost.setName("Heating Boost");
+  mqttHeatingBoost.setIcon("mdi:thermometer-high");
+  
+  mqttMachineMode.setName("Machine Mode");
+  mqttMachineMode.setIcon("mdi:coffee");
+
+  Serial.println("Starting MQTT...");
+  mqtt.onConnected(onMqttConnected);
+  mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD);
+  Serial.print("MQTT broker: ");
+  Serial.print(MQTT_BROKER_ADDR);
+  Serial.print(":");
+  Serial.println(MQTT_BROKER_PORT);
+
   pinMode(PUMP_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -112,12 +174,14 @@ void setup() {
   display.display();
 
   t.every(32, updateDisplay);
+  t.every(1000, publishMQTTState);
 
   machineSerialInput.write(0x11);
 }
 
 void loop() {
-  ArduinoOTA.handle();  // Handles a code update request
+  ArduinoOTA.handle();
+  mqtt.loop();
 
   t.update();
 
