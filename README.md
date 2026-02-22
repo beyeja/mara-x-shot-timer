@@ -17,19 +17,26 @@
 - fork and rewrite of https://github.com/alexrus/marax_timer
 - written for ESP32C3
 - needs ArduinoOTA Dependency
-- 3d printed case will be added later
 
 ## initial setup
 
-- initial upload to devboard needs to happen via usb
+- install arduino IDE
+  - install board support for esp32c3 dev module
 - add WIFI credentials to code
   - add `secrets.h` file and add the following:
-  ```C++
-  #define WIFI_SSID "your wifi name/ssid"
-  #define WIFI_PW "your wifi password"
-  #define OTA_PW "your password for OTA updates"
-  ```
+
+    ```C++
+    #define WIFI_SSID "your wifi name/ssid"
+    #define WIFI_PW "your wifi password"
+    #define OTA_PW "your password for OTA updates"
+    ```
+
   - alternatively you can add your credentials directly in timer.ino but be sure to not commit them to git
+
+- initial upload to devboard needs to happen via usb
+  build and upload the sketch
+
+- connect
 
 ## Hardware
 

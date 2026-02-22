@@ -29,6 +29,7 @@
 
 #include "secrets.h"  // your secrets for wifi connection
 #include "coffeeAnimation.h"
+#include "wifiIcon.h"
 
 const char* ssid = WIFI_SSID;      // wifi name
 const char* password = WIFI_PW;    // wifi pw
@@ -337,7 +338,8 @@ void updateDisplay() {
       display.setCursor(display.width() / 2 - 1 + 17, 20);
       display.printf("%02.0f", lastShotTimeSec);
 
-      // show last machine serial update
+      // Machine not responding for >1s - show coffee animation and time since last contact
+      // This acts as a "going to sleep" / connection lost indicator
       long lastValueUpdate = millis() - lastSerialUpdatedValue;
       if (lastValueUpdate > 1000) {
         // drawBitmap(x position, y position, bitmap data, bitmap width, bitmap height, color)
@@ -348,6 +350,11 @@ void updateDisplay() {
         display.setCursor(display.width() - 20, 0);
         display.printf("%0.0f", float(lastValueUpdate / 1000));
       } else {
+        // Draw WiFi indicator on right, aligned with C/S letter
+        if (WiFi.status() == WL_CONNECTED) {
+          drawWifiIcon(display.width() - 16, 1);
+        }
+
         // draw machine prio mode state C/S
         if (coffeeSteamMode.length() > 0) {
           display.setTextSize(2);
@@ -395,4 +402,9 @@ void updateDisplay() {
   }
 
   display.display();
+}
+
+void drawWifiIcon(int x, int y) {
+  display.drawBitmap(x, y, wifiIcon, WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT,
+                     SCREEN_WHITE);
 }
