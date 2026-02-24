@@ -1,48 +1,53 @@
-#include <ArduinoOTA.h>
 #include <ArduinoHA.h>
+#include <ArduinoOTA.h>
 
-#define D5 (21)                       // machine bus pin
-#define D6 (20)                       // machine bus pin
-#define D7 (4)                        // pump/reedswitch pin
-#define PUMP_PIN D7                   // pump/reedswitch
-#define TIME_SHOT_LIMIT 20            // limit in seconds when pump on is considered a shot
+#define D5 (21)            // machine bus pin
+#define D6 (20)            // machine bus pin
+#define D7 (4)             // pump/reedswitch pin
+#define PUMP_PIN D7        // pump/reedswitch
+#define TIME_SHOT_LIMIT 20 // limit in seconds when pump on is considered a shot
 
-#define TIMER_INACTIVE 0              // value to be set when timer is inactive to not fall asleep again immediatly
-#define SLEEP_TIME 1000 * 60 * 15     // time until sleep after wakeup/startup
-#define MACHINE_SLEEP_TIME 1000 * 30  // time until sleep when machine is off
+// value to be set when timer is inactive to not fall asleep again
+// immediatly
+#define TIMER_INACTIVE 0
+#define SLEEP_TIME 1000 * 60 * 15    // time until sleep after wakeup/startup
+#define MACHINE_SLEEP_TIME 1000 * 30 // time until sleep when machine is off
 
-#define I2C_ADDRESS 0x3C  // 0x3c //0x3D
-#define SCREEN_WIDTH 128  // OLED display width, in pixels
-#define SCREEN_HEIGHT 64  // OLED display height, in pixels
+#define I2C_ADDRESS 0x3C // 0x3c //0x3D
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 // set to true/false when using another type of reed sensor
-#define REED_OPEN true  // reed default open or default closed
+#define REED_OPEN true // reed default open or default closed
 
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_SH110X.h>
-#include <splash.h>
 #include <Adafruit_GFX.h>
-#include <Wire.h>
-#include <Timer.h>
+#include <Adafruit_SH110X.h>
+#include <Adafruit_SSD1306.h>
+#include <ArduinoOTA.h> // For enabling over-the-air updates
 #include <SoftwareSerial.h>
-#include <ArduinoOTA.h>  // For enabling over-the-air updates
-#include <WiFi.h>        // For connecting ESP32 to WiFi
+#include <Timer.h>
+#include <WiFi.h> // For connecting ESP32 to WiFi
+#include <Wire.h>
+#include <splash.h>
 
 WiFiClient client;
 
-#include "secrets.h"  // your secrets for wifi connection
 #include "coffeeAnimation.h"
+#include "secrets.h" // your secrets for wifi connection
 #include "wifiIcon.h"
 
-const char* ssid = WIFI_SSID;      // wifi name
-const char* password = WIFI_PW;    // wifi pw
-const char* otaPassword = OTA_PW;  // wifi pw
+const char *ssid = WIFI_SSID;     // wifi name
+const char *password = WIFI_PW;   // wifi pw
+const char *otaPassword = OTA_PW; // wifi pw
 
-#define SCREEN_WHITE 1  // SSD1306_WHITE
-Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+#define SCREEN_WHITE 1 // SSD1306_WHITE
+Adafruit_SH1106G display =
+    Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // Adafruit_SH1106  display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 SoftwareSerial machineSerialInput(D5, D6);
 Timer t;
+
+// mqtt setup
 HADevice device;
 HAMqtt mqtt(client, device);
 HASensor mqttTemperature("temperature");
@@ -52,14 +57,15 @@ HASensor mqttPumpSensor("pumpSensor");
 HASensor mqttHeating("heating");
 HASensor mqttHeatingBoost("heatingBoost");
 HASensor mqttMachineMode("machineMode");
+HASensor mqttSleep("sleep");
 
 // main states
-int pumpOn = 0;                   // is pump on
-bool displayOn = true;            // is display on
-float pumpOnTimeSec = 0;          // time of pump on
-long lastSerialUpdatedValue = 0;  // time of last update of machine serial
-float lastShotTimeSec = 0;        // time of last pump on time considered a shot
-bool isShotTimerMode = false;     // display is in shot timer mode
+int pumpOn = 0;                  // is pump on
+bool displayOn = true;           // is display on
+float pumpOnTimeSec = 0;         // time of pump on
+long lastSerialUpdatedValue = 0; // time of last update of machine serial
+float lastShotTimeSec = 0;       // time of last pump on time considered a shot
+bool isShotTimerMode = false;    // display is in shot timer mode
 // machine message states
 String coffeeSteamMode = "";
 bool isHeating = false;
@@ -72,15 +78,19 @@ long timerStopMillis = 0;
 long timerDisplayOffMillis = TIMER_INACTIVE;
 long lastSerialUpdateMillis = 0;
 
+// time when pump sensor last changed, used to detect pump activity and when
+// pump turned off
+unsigned long timerLastPumpSensorChange = 0;
+// previous pump state to detect pump activity
+bool lastPumpSensorState = false;
+
 // reading machine serial variables
 const byte numChars = 32;
 char receivedChars[numChars];
 static byte ndx = 0;
 const char endMarker = '\n';
 
-void onMqttConnected() {
-  Serial.println("MQTT connected!");
-}
+void onMqttConnected() { Serial.println("MQTT connected!"); }
 
 void publishMQTTState() {
   mqttTemperature.setValue(temp.c_str());
@@ -90,34 +100,12 @@ void publishMQTTState() {
   mqttHeating.setValue(isHeating ? "ON" : "OFF");
   mqttHeatingBoost.setValue(isHeatingBoost ? "ON" : "OFF");
   mqttMachineMode.setValue(coffeeSteamMode.c_str());
+  mqttSleep.setValue(displayOn ? "OFF" : "ON");
 }
 
-
-void setup() {
-  // Serial logging connection
-  Serial.begin(115200);
-
-  // setup wifi connection
-  WiFi.disconnect();
-  Serial.println("Wifi: Connecting...");
-  // setup OTA updates
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname("esp-lelit-mara-timer");
-  WiFi.begin(ssid, password);  // Connect to WiFi - defaults to WiFi Station mode
-  // Ensure WiFi is connected
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("not connected, trying to connect to wifi...");
-    delay(500);
-  }
-  Serial.println("Wifi connected.");
-
-  // setup ota
-  ArduinoOTA.begin();  // Starts OTA
-  ArduinoOTA.setHostname("esp-lelit-mara-timer");
-  ArduinoOTA.setPassword(otaPassword);
-
-  // setup MQTT
-  byte uniqueId[] = { 'e', 's', 'p', '-', 'm', 'a', 'r', 'a', '-', 't', 'i', 'm', 'e', 'r' };
+void setupMQTT() {
+  byte uniqueId[] = {'e', 's', 'p', '-', 'm', 'a', 'r',
+                     'a', '-', 't', 'i', 'm', 'e', 'r'};
   device.setUniqueId(uniqueId, sizeof(uniqueId));
   device.setName("Lelit Mara X Timer");
   device.setSoftwareVersion("1.0.0");
@@ -125,24 +113,27 @@ void setup() {
 
   mqttTemperature.setName("Temperature");
   mqttTemperature.setUnitOfMeasurement("C");
-  
+
   mqttSteamTemp.setName("Steam Temperature");
   mqttSteamTemp.setUnitOfMeasurement("C");
-  
+
   mqttLastShotTime.setName("Last Shot Time");
   mqttLastShotTime.setUnitOfMeasurement("s");
-  
-  mqttPumpSensor.setName("Pump On");
+
+  mqttPumpSensor.setName("Pump State");
   mqttPumpSensor.setIcon("mdi:water");
-  
+
   mqttHeating.setName("Heating");
   mqttHeating.setIcon("mdi:thermometer");
-  
+
   mqttHeatingBoost.setName("Heating Boost");
   mqttHeatingBoost.setIcon("mdi:thermometer-high");
-  
+
   mqttMachineMode.setName("Machine Mode");
   mqttMachineMode.setIcon("mdi:coffee");
+
+  mqttSleep.setName("Sleep");
+  mqttSleep.setIcon("mdi:sleep");
 
   Serial.println("Starting MQTT...");
   mqtt.onConnected(onMqttConnected);
@@ -151,6 +142,35 @@ void setup() {
   Serial.print(MQTT_BROKER_ADDR);
   Serial.print(":");
   Serial.println(MQTT_BROKER_PORT);
+}
+
+void setup() {
+  // Serial logging connection
+  Serial.begin(115200);
+
+  // setup wifi connection
+  WiFi.disconnect();
+  Serial.println("Wifi: Connecting...");
+
+  // setup OTA updates
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname("esp-lelit-mara-timer");
+  WiFi.begin(ssid, password); // Connect to WiFi - defaults to WiFi Station mode
+
+  // Ensure WiFi is connected
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("not connected, trying to connect to wifi...");
+    delay(500);
+  }
+  Serial.println("Wifi connected.");
+
+  // setup ota
+  ArduinoOTA.begin(); // Starts OTA
+  ArduinoOTA.setHostname("esp-lelit-mara-timer");
+  ArduinoOTA.setPassword(otaPassword);
+
+  // setup MQTT
+  setupMQTT();
 
   pinMode(PUMP_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -159,13 +179,14 @@ void setup() {
   // machine serial connection
   machineSerialInput.begin(9600);
 
+  // clears serial buffer and variables for reading machine serial messages
   memset(receivedChars, 0, numChars);
 
   // set display pins
   // Wire.begin(6, 7); // 6 sck // 7 sda
-  Wire.begin(7, 6);  // 6 sck // 7 sda
+  Wire.begin(7, 6); // 6 sck // 7 sda
 
-  delay(250);  // wait for the OLED to power up
+  delay(250); // wait for the OLED to power up
   display.begin(0x3C, true);
   // display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
@@ -187,6 +208,7 @@ void loop() {
 
   detectSleep();
   detectPumpChanges();
+  updateShotTimerMode();
   readMachineInput();
   evalMachineMessage();
   // display.dim(false);
@@ -285,33 +307,49 @@ void evalMachineMessage() {
 void detectPumpChanges() {
   digitalWrite(LED_BUILTIN, digitalRead(PUMP_PIN));
 
-  // check pump state
-  pumpOn = REED_OPEN ? digitalRead(PUMP_PIN) : !digitalRead(PUMP_PIN);
+  // read raw sensor value (inverts if REED_OPEN is false)
+  bool raw = REED_OPEN ? digitalRead(PUMP_PIN) : !digitalRead(PUMP_PIN);
 
-  if (!isShotTimerMode && !pumpOn) {
+  // detect pump activity
+  if (raw != lastPumpSensorState) {
+    // when pump state changes, store new state and time, consider pump to be
+    // running
+
+    lastPumpSensorState = raw;
+    timerLastPumpSensorChange = millis();
+
+    // emit event that pump turned on
+    if (!pumpOn) {
+      Serial.println("Pump ON");
+      mqttPumpSensor.setValue("ON");
+
+      pumpOn = true;
+    }
+  } else if (pumpOn && millis() - timerLastPumpSensorChange > 500) {
+    // when pump was on but now off for >500ms, consider pump off
+
+    pumpOn = false;
+    Serial.println("Pump OFF");
+    mqttPumpSensor.setValue("OFF");
+  }
+}
+
+void updateShotTimerMode() {
+  if (!isShotTimerMode && pumpOn) {
     timerStartMillis = millis();
     isShotTimerMode = true;
-    Serial.println("Start pump");
+    timerStopMillis = 0;
   }
 
-  if (isShotTimerMode && pumpOn) {
-    if (timerStopMillis == 0) {
-      timerStopMillis = millis();
-    }
-
-    if (millis() - timerStopMillis > 500) {
-      isShotTimerMode = false;
-      timerStopMillis = 0;
-      display.invertDisplay(false);
-      Serial.println("Stop pump");
-    }
-  } else {
-    timerStopMillis = 0;
+  if (isShotTimerMode && !pumpOn) {
+    timerStopMillis = millis();
+    isShotTimerMode = false;
+    display.invertDisplay(false);
   }
 }
 
 void detectSleep() {
-  // I dont get this check
+  // wake up when machine updates or pump turns on
   if (!displayOn && millis() - lastSerialUpdatedValue <= MACHINE_SLEEP_TIME) {
     displayOn = true;
 
@@ -320,7 +358,7 @@ void detectSleep() {
 
     Serial.println("Wake up");
   }
-  
+
   // update pump related display off timer when pump stops
   if (isShotTimerMode && pumpOn && millis() - timerStopMillis > 500) {
     timerDisplayOffMillis = millis();
@@ -330,25 +368,26 @@ void detectSleep() {
 
   // go into sleep mode
   if (!isShotTimerMode && displayOn) {
-    if (timerDisplayOffMillis != TIMER_INACTIVE && millis() - timerDisplayOffMillis >= SLEEP_TIME) {
+    if (timerDisplayOffMillis != TIMER_INACTIVE &&
+        millis() - timerDisplayOffMillis >= SLEEP_TIME) {
       // go to sleep due to last shot time
-    
+
       // reset values to be cleared after wakeup
       timerDisplayOffMillis = TIMER_INACTIVE;
       pumpOnTimeSec = 0;
-      lastShotTimeSec = 0;  
+      lastShotTimeSec = 0;
 
       // turn off screen
       displayOn = false;
-      
-      Serial.println("Last Shot Sleep");  
+
+      Serial.println("Last Shot Sleep");
     } else if (millis() - lastSerialUpdatedValue >= MACHINE_SLEEP_TIME) {
       // go to sleep due to last machine message update
-      
+
       // turn off screen
       displayOn = false;
-      
-      Serial.println("Last Message Sleep");  
+
+      Serial.println("Last Message Sleep");
     }
   }
 }
@@ -402,12 +441,15 @@ void updateDisplay() {
       display.setCursor(display.width() / 2 - 1 + 17, 20);
       display.printf("%02.0f", lastShotTimeSec);
 
-      // Machine not responding for >1s - show coffee animation and time since last contact
-      // This acts as a "going to sleep" / connection lost indicator
+      // Machine not responding for >1s - show coffee animation and time since
+      // last contact This acts as a "going to sleep" / connection lost
+      // indicator
       long lastValueUpdate = millis() - lastSerialUpdatedValue;
       if (lastValueUpdate > 1000) {
-        // drawBitmap(x position, y position, bitmap data, bitmap width, bitmap height, color)
-        display.drawBitmap(0, 0, coffeeFrames[coffeeFrame], COFFEE_FRAME_WIDTH, COFFEE_FRAME_HEIGHT, SCREEN_WHITE);
+        // drawBitmap(x position, y position, bitmap data, bitmap width, bitmap
+        // height, color)
+        display.drawBitmap(0, 0, coffeeFrames[coffeeFrame], COFFEE_FRAME_WIDTH,
+                           COFFEE_FRAME_HEIGHT, SCREEN_WHITE);
         coffeeFrame = (coffeeFrame + 1) % COFFEE_FRAME_COUNT;
 
         display.setTextSize(1);
@@ -448,7 +490,7 @@ void updateDisplay() {
           display.setCursor(1, 20);
           display.print(temp);
           display.setTextSize(1);
-          display.print((char)247);  // ˚-char
+          display.print((char)247); // ˚-char
           display.print("C");
         }
 
@@ -458,7 +500,7 @@ void updateDisplay() {
           display.setCursor(1, 48);
           display.print(steamTemp);
           display.setTextSize(1);
-          display.print((char)247);  // ˚-char
+          display.print((char)247); // ˚-char
           display.print("C");
         }
       }
