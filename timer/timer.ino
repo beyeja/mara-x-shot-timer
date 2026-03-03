@@ -7,6 +7,17 @@
 #define PUMP_PIN D7        // pump/reedswitch
 #define TIME_SHOT_LIMIT 20 // limit in seconds when pump on is considered a shot
 
+// shot timer background animation tuning
+// Circle is 0 from 0–25s, grows to max between 25–30s,
+// stays max at 30s, then shrinks back to 0 by 35s.
+#define SHOT_ANIM_GROW_START_SECONDS 25.0f
+#define SHOT_ANIM_MAX_SECONDS 30.0f    // time when circle reaches max size
+#define SHOT_ANIM_TOTAL_SECONDS 35.0f  // time when circle shrinks back to 0
+#define SHOT_ANIM_CENTER_X (SCREEN_WIDTH / 2)
+#define SHOT_ANIM_CENTER_Y (SCREEN_HEIGHT / 2)
+// Chosen so a full circle covers the display (approx half diagonal)
+#define SHOT_ANIM_MAX_RADIUS 72
+
 // value to be set when timer is inactive to not fall asleep again
 // immediatly
 #define TIMER_INACTIVE 0
@@ -53,7 +64,7 @@ Adafruit_SH1106G display =
 SoftwareSerial machineSerialInput(D5, D6);
 Timer t;
 
-// mqtt setup (always compiled in, enabled/disabled at runtime)
+// mqtt setup
 HADevice device;
 HAMqtt mqtt(client, device);
 HASensor mqttTemperature("temperature");
@@ -86,6 +97,9 @@ long lastSerialUpdateMillis = 0;
 
 // whether MQTT configuration is valid (set in setup based on secrets.h)
 bool mqttConfigured = false;
+
+// current radius of the shot timer background circle animation
+int shotAnimRadius = 0;
 
 // time when pump sensor last changed, used to detect pump activity and when
 // pump turned off
@@ -429,8 +443,43 @@ void updatePumpOnTime() {
     if (pumpOnTimeSec > TIME_SHOT_LIMIT) {
       lastShotTimeSec = pumpOnTimeSec;
     }
+
+    // compute animation radius based on current shot time
+    float t = pumpOnTimeSec;
+    float progress = 0.0f;
+
+    if (t <= SHOT_ANIM_GROW_START_SECONDS) {
+      // no circle before grow window
+      progress = 0.0f;
+    } else if (t <= SHOT_ANIM_MAX_SECONDS) {
+      // grow from 0 to max between SHOT_ANIM_GROW_START_SECONDS and SHOT_ANIM_MAX_SECONDS
+      progress =
+          (t - SHOT_ANIM_GROW_START_SECONDS) /
+          (SHOT_ANIM_MAX_SECONDS - SHOT_ANIM_GROW_START_SECONDS);
+    } else if (t <= SHOT_ANIM_TOTAL_SECONDS) {
+      // shrink back to 0 between SHOT_ANIM_MAX_SECONDS and SHOT_ANIM_TOTAL_SECONDS
+      progress =
+          (SHOT_ANIM_TOTAL_SECONDS - t) /
+          (SHOT_ANIM_TOTAL_SECONDS - SHOT_ANIM_MAX_SECONDS);
+    } else {
+      progress = 0.0f;
+    }
+
+    if (progress < 0.0f) {
+      progress = 0.0f;
+    } else if (progress > 1.0f) {
+      progress = 1.0f;
+    }
+
+    int radius = (int)(progress * SHOT_ANIM_MAX_RADIUS);
+    // ensure we see at least a tiny circle once the timer has started
+    if (radius == 0 && t > 0.0f) {
+      radius = 1;
+    }
+    shotAnimRadius = radius;
   } else {
     pumpOnTimeSec = lastShotTimeSec;
+    shotAnimRadius = 0;
   }
 }
 
@@ -441,6 +490,7 @@ void updateDisplay() {
     updatePumpOnTime();
 
     if (isShotTimerMode) {
+      // prepare time components once for this frame
       double secFractions, seconds;
       secFractions = modf(pumpOnTimeSec, &seconds);
       secFractions = secFractions * 10;
@@ -451,7 +501,23 @@ void updateDisplay() {
         secFractions = secFractions < 0 ? 0 : secFractions;
       }
 
-      // draw fullscreen time
+      // Use off-screen buffers and XOR combine to render the animated
+      // background circle behind the time while keeping digits readable.
+      const size_t bufferSize = (SCREEN_WIDTH * SCREEN_HEIGHT) / 8;
+      uint8_t *framebuffer = display.getBuffer();
+      static uint8_t circleBuffer[bufferSize];
+      static uint8_t timeBuffer[bufferSize];
+
+      // 1) Draw only the animated circle into the framebuffer
+      display.clearDisplay();
+      if (shotAnimRadius > 0) {
+        display.fillCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y, shotAnimRadius,
+                           SCREEN_WHITE);
+      }
+      memcpy(circleBuffer, framebuffer, bufferSize);
+
+      // 2) Draw only the time digits into the framebuffer
+      display.clearDisplay();
       display.setTextSize(4);
       display.setCursor(20, 14);
       display.printf("%02.0f", seconds);
@@ -459,6 +525,12 @@ void updateDisplay() {
       display.setTextSize(2);
       display.printf(".%1.0f", secFractions);
       display.print("s");
+      memcpy(timeBuffer, framebuffer, bufferSize);
+
+      // 3) XOR circle and time into the final framebuffer
+      for (size_t i = 0; i < bufferSize; i++) {
+        framebuffer[i] = circleBuffer[i] ^ timeBuffer[i];
+      }
     } else {
       // draw dashboard
 
