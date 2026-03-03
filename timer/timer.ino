@@ -1,4 +1,4 @@
-#include <ArduinoHA.h>
+// Core / network
 #include <ArduinoOTA.h>
 
 #define D5 (21)            // machine bus pin
@@ -23,7 +23,6 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 #include <Adafruit_SSD1306.h>
-#include <ArduinoOTA.h> // For enabling over-the-air updates
 #include <SoftwareSerial.h>
 #include <Timer.h>
 #include <WiFi.h> // For connecting ESP32 to WiFi
@@ -32,8 +31,15 @@
 
 WiFiClient client;
 
-#include "coffeeAnimation.h"
 #include "secrets.h" // your secrets for wifi connection
+#include <ArduinoHA.h>
+
+// icons and animations
+#include "coffeeAnimation.h"
+#include "coffeeIcon.h"
+#include "modeUnknownIcon.h"
+#include "steamIcon.h"
+#include "tempIcon.h"
 #include "wifiIcon.h"
 
 const char *ssid = WIFI_SSID;     // wifi name
@@ -47,7 +53,7 @@ Adafruit_SH1106G display =
 SoftwareSerial machineSerialInput(D5, D6);
 Timer t;
 
-// mqtt setup
+// mqtt setup (always compiled in, enabled/disabled at runtime)
 HADevice device;
 HAMqtt mqtt(client, device);
 HASensor mqttTemperature("temperature");
@@ -78,6 +84,9 @@ long timerStopMillis = 0;
 long timerDisplayOffMillis = TIMER_INACTIVE;
 long lastSerialUpdateMillis = 0;
 
+// whether MQTT configuration is valid (set in setup based on secrets.h)
+bool mqttConfigured = false;
+
 // time when pump sensor last changed, used to detect pump activity and when
 // pump turned off
 unsigned long timerLastPumpSensorChange = 0;
@@ -93,6 +102,9 @@ const char endMarker = '\n';
 void onMqttConnected() { Serial.println("MQTT connected!"); }
 
 void publishMQTTState() {
+  if (!mqttConfigured) {
+    return;
+  }
   mqttTemperature.setValue(temp.c_str());
   mqttSteamTemp.setValue(steamTemp.c_str());
   mqttLastShotTime.setValue(String(lastShotTimeSec).c_str());
@@ -169,8 +181,18 @@ void setup() {
   ArduinoOTA.setHostname("esp-lelit-mara-timer");
   ArduinoOTA.setPassword(otaPassword);
 
-  // setup MQTT
-  setupMQTT();
+  // setup MQTT if a valid broker address is configured
+#ifdef MQTT_BROKER_ADDR
+  if (MQTT_BROKER_ADDR[0] != 0 || MQTT_BROKER_ADDR[1] != 0 ||
+      MQTT_BROKER_ADDR[2] != 0 || MQTT_BROKER_ADDR[3] != 0) {
+    mqttConfigured = true;
+    setupMQTT();
+  } else {
+    Serial.println("MQTT disabled: broker IP is 0.0.0.0");
+  }
+#else
+  Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
+#endif
 
   pinMode(PUMP_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -202,7 +224,10 @@ void setup() {
 
 void loop() {
   ArduinoOTA.handle();
-  mqtt.loop();
+
+  if (mqttConfigured) {
+    mqtt.loop();
+  }
 
   t.update();
 
@@ -321,7 +346,9 @@ void detectPumpChanges() {
     // emit event that pump turned on
     if (!pumpOn) {
       Serial.println("Pump ON");
-      mqttPumpSensor.setValue("ON");
+      if (mqttConfigured) {
+        mqttPumpSensor.setValue("ON");
+      }
 
       pumpOn = true;
     }
@@ -330,7 +357,9 @@ void detectPumpChanges() {
 
     pumpOn = false;
     Serial.println("Pump OFF");
-    mqttPumpSensor.setValue("OFF");
+    if (mqttConfigured) {
+      mqttPumpSensor.setValue("OFF");
+    }
   }
 }
 
@@ -458,30 +487,36 @@ void updateDisplay() {
       } else {
         // Draw WiFi indicator on right, aligned with C/S letter
         if (WiFi.status() == WL_CONNECTED) {
-          drawWifiIcon(display.width() - 16, 1);
+          display.drawBitmap(display.width() - 16, 1, wifiIcon, WIFI_ICON_WIDTH,
+                             WIFI_ICON_HEIGHT, SCREEN_WHITE);
         }
 
-        // draw machine prio mode state C/S
-        if (coffeeSteamMode.length() > 0) {
-          display.setTextSize(2);
-          display.setCursor(1, 1);
-          display.print(coffeeSteamMode);
+        // draw machine prio mode state icon
+        if (coffeeSteamMode == "C") {
+          display.drawBitmap(1, 1, coffeeIcon, COFFEE_ICON_WIDTH,
+                             COFFEE_ICON_HEIGHT, SCREEN_WHITE);
+        } else if (coffeeSteamMode == "S") {
+          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH,
+                             STEAM_ICON_HEIGHT, SCREEN_WHITE);
+        } else if (coffeeSteamMode == "X") {
+          display.drawBitmap(1, 1, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
+                             MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
         }
 
         // draw heating mode
         if (isHeating) {
-          // draw fill circle if heating on
-          display.fillCircle(45, 7, 6, SCREEN_WHITE);
-        } else {
-          // draw empty circle if heating off
-          display.drawCircle(45, 7, 6, SCREEN_WHITE);
+          display.drawBitmap(45, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
+                             SCREEN_WHITE);
         }
+        //  else {
+        //   // draw empty circle if heating off
+        //   display.drawCircle(45, 7, 6, SCREEN_WHITE);
+        // }
         if (isHeatingBoost) {
-          // draw fill rectangle if heating on
-          display.fillRect(51, 1, 12, 12, SCREEN_WHITE);
-        } else {
-          // draw empty rectangle if heating off
-          display.drawRect(51, 1, 12, 12, SCREEN_WHITE);
+          display.drawBitmap(51, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
+                             SCREEN_WHITE);
+          // // draw fill rectangle if heating on
+          // display.fillRect(51, 1, 12, 12, SCREEN_WHITE);
         }
 
         // draw temperature
@@ -508,9 +543,4 @@ void updateDisplay() {
   }
 
   display.display();
-}
-
-void drawWifiIcon(int x, int y) {
-  display.drawBitmap(x, y, wifiIcon, WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT,
-                     SCREEN_WHITE);
 }
