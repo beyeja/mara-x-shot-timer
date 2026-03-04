@@ -8,9 +8,9 @@
 #define TIME_SHOT_LIMIT 20 // limit in seconds when pump on is considered a shot
 
 // shot timer background animation tuning
-// Circle is 0 from 0–25s, grows to max between 25–30s,
-// stays max at 30s, then shrinks back to 0 by 35s.
-#define SHOT_ANIM_GROW_START_SECONDS 25.0f
+// Circle is 0 until TIME_SHOT_LIMIT, grows to max between
+// TIME_SHOT_LIMIT–30s, then shrinks back to 0 by 35s.
+#define SHOT_ANIM_GROW_START_SECONDS TIME_SHOT_LIMIT
 #define SHOT_ANIM_MAX_SECONDS 30.0f    // time when circle reaches max size
 #define SHOT_ANIM_TOTAL_SECONDS 35.0f  // time when circle shrinks back to 0
 #define SHOT_ANIM_CENTER_X (SCREEN_WIDTH / 2)
@@ -387,7 +387,6 @@ void updateShotTimerMode() {
   if (isShotTimerMode && !pumpOn) {
     timerStopMillis = millis();
     isShotTimerMode = false;
-    display.invertDisplay(false);
   }
 }
 
@@ -508,12 +507,16 @@ void updateDisplay() {
       static uint8_t circleBuffer[bufferSize];
       static uint8_t timeBuffer[bufferSize];
 
-      // 1) Draw only the animated circle into the framebuffer
+    // 1) Draw only the animated circle ring (2px wide) into the framebuffer
       display.clearDisplay();
-      if (shotAnimRadius > 0) {
-        display.fillCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y, shotAnimRadius,
-                           SCREEN_WHITE);
-      }
+    if (shotAnimRadius >= 2) {
+      // outer ring
+      display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y, shotAnimRadius,
+                         SCREEN_WHITE);
+      // inner ring for 2px stroke
+      display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y,
+                         shotAnimRadius - 1, SCREEN_WHITE);
+    }
       memcpy(circleBuffer, framebuffer, bufferSize);
 
       // 2) Draw only the time digits into the framebuffer
@@ -568,8 +571,8 @@ void updateDisplay() {
           display.drawBitmap(1, 1, coffeeIcon, COFFEE_ICON_WIDTH,
                              COFFEE_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "S") {
-          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH,
-                             STEAM_ICON_HEIGHT, SCREEN_WHITE);
+          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH, STEAM_ICON_HEIGHT,
+                             SCREEN_WHITE);
         } else if (coffeeSteamMode == "X") {
           display.drawBitmap(1, 1, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
                              MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
