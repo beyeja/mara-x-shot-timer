@@ -698,15 +698,9 @@ void updateDisplay() {
           display.drawBitmap(45, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
                              SCREEN_WHITE);
         }
-        //  else {
-        //   // draw empty circle if heating off
-        //   display.drawCircle(45, 7, 6, SCREEN_WHITE);
-        // }
         if (isHeatingBoost) {
           display.drawBitmap(51, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
                              SCREEN_WHITE);
-          // // draw fill rectangle if heating on
-          // display.fillRect(51, 1, 12, 12, SCREEN_WHITE);
         }
 
         // draw temperature
