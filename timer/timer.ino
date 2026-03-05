@@ -11,8 +11,8 @@
 // Circle is 0 until TIME_SHOT_LIMIT, grows to max between
 // TIME_SHOT_LIMIT–30s, then shrinks back to 0 by 35s.
 #define SHOT_ANIM_GROW_START_SECONDS TIME_SHOT_LIMIT
-#define SHOT_ANIM_MAX_SECONDS 30.0f    // time when circle reaches max size
-#define SHOT_ANIM_TOTAL_SECONDS 35.0f  // time when circle shrinks back to 0
+#define SHOT_ANIM_MAX_SECONDS 30.0f   // time when circle reaches max size
+#define SHOT_ANIM_TOTAL_SECONDS 35.0f // time when circle shrinks back to 0
 #define SHOT_ANIM_CENTER_X (SCREEN_WIDTH / 2)
 #define SHOT_ANIM_CENTER_Y (SCREEN_HEIGHT / 2)
 // Chosen so a full circle covers the display (approx half diagonal)
@@ -39,6 +39,7 @@
 #include <WiFi.h> // For connecting ESP32 to WiFi
 #include <Wire.h>
 #include <splash.h>
+#include <time.h> // for NTP / local time support
 
 WiFiClient client;
 
@@ -58,9 +59,27 @@ const char *password = WIFI_PW;   // wifi pw
 const char *otaPassword = OTA_PW; // wifi pw
 
 #define SCREEN_WHITE 1 // SSD1306_WHITE
-Adafruit_SH1106G display =
-    Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-// Adafruit_SH1106  display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// contrast levels for 'normal' and 'dim' modes (0-255)
+#define CONTRAST_NORMAL 0xCF
+#define CONTRAST_DIM 0x08
+
+// helper to send a raw command byte over I2C to the OLED
+static void sendDisplayCommand(uint8_t cmd) {
+  Wire.beginTransmission(I2C_ADDRESS);
+  Wire.write(0x00); // Co = 0, D/C# = 0 => command
+  Wire.write(cmd);
+  Wire.endTransmission();
+}
+
+// contrast setter uses two commands
+static void setDisplayContrast(uint8_t level) {
+  sendDisplayCommand(0x81);
+  sendDisplayCommand(level);
+}
+
 SoftwareSerial machineSerialInput(D5, D6);
 Timer t;
 
@@ -77,12 +96,33 @@ HASensor mqttMachineMode("machineMode");
 HASensor mqttSleep("sleep");
 
 // main states
-int pumpOn = 0;                  // is pump on
-bool displayOn = true;           // is display on
+int pumpOn = 0;        // is pump on
+bool displayOn = true; // is display on
+// pump state save for activity detection (previously handled within
+// detectPumpChanges)
+bool lastPumpOn = false;
 float pumpOnTimeSec = 0;         // time of pump on
 long lastSerialUpdatedValue = 0; // time of last update of machine serial
 float lastShotTimeSec = 0;       // time of last pump on time considered a shot
 bool isShotTimerMode = false;    // display is in shot timer mode
+
+// track when the screen was last woken and whether it's been dimmed
+long displayWakeMillis = 0;
+bool displayDimmed = false;
+
+// previous machine mode used to detect changes
+String prevCoffeeSteamMode = "";
+
+// helper to reset dim state and treat as a wake event
+static void wakeForActivity() {
+  // only undim if display is currently on and has been dimmed
+  if (displayOn) {
+    setDisplayContrast(CONTRAST_NORMAL);
+    displayDimmed = false;
+    displayWakeMillis = millis();
+  }
+}
+
 // machine message states
 String coffeeSteamMode = "";
 bool isHeating = false;
@@ -94,6 +134,11 @@ long timerStartMillis = 0;
 long timerStopMillis = 0;
 long timerDisplayOffMillis = TIMER_INACTIVE;
 long lastSerialUpdateMillis = 0;
+
+// midnight flash tracking
+int lastFlashDay = -1;
+long flashStartMillis = 0;
+bool flashing = false;
 
 // whether MQTT configuration is valid (set in setup based on secrets.h)
 bool mqttConfigured = false;
@@ -182,6 +227,8 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.hostname("esp-lelit-mara-timer");
   WiFi.begin(ssid, password); // Connect to WiFi - defaults to WiFi Station mode
+  // configure NTP (UTC, adjust offset later with timezone if needed)
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
   // Ensure WiFi is connected
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
@@ -229,6 +276,18 @@ void setup() {
   display.setTextColor(SCREEN_WHITE);
   display.drawPixel(10, 10, SH110X_WHITE);
   display.display();
+
+  // white-out for 5 seconds on cold start to even out pixel wear
+  display.fillScreen(SCREEN_WHITE);
+  display.display();
+  delay(5000);
+  display.clearDisplay();
+  display.display();
+
+  // ensure screen starts at full brightness
+  setDisplayContrast(CONTRAST_NORMAL);
+  displayWakeMillis = millis();
+  displayDimmed = false;
 
   t.every(32, updateDisplay);
   t.every(1000, publishMQTTState);
@@ -286,6 +345,9 @@ void readMachineInput() {
 
 // read values from machine serial message
 void evalMachineMessage() {
+  // detect mode change before we overwrite the variable
+  String oldMode = coffeeSteamMode;
+
   // reset states
   coffeeSteamMode = "";
   isHeating = false;
@@ -300,6 +362,11 @@ void evalMachineMessage() {
     coffeeSteamMode = "S";
   } else if (receivedChars[0]) {
     coffeeSteamMode = "X";
+  }
+
+  // if mode changed, wake display
+  if (coffeeSteamMode != oldMode) {
+    wakeForActivity();
   }
 
   // eval heating mode
@@ -365,6 +432,9 @@ void detectPumpChanges() {
       }
 
       pumpOn = true;
+
+      // wake display for activity
+      wakeForActivity();
     }
   } else if (pumpOn && millis() - timerLastPumpSensorChange > 500) {
     // when pump was on but now off for >500ms, consider pump off
@@ -395,8 +465,14 @@ void detectSleep() {
   if (!displayOn && millis() - lastSerialUpdatedValue <= MACHINE_SLEEP_TIME) {
     displayOn = true;
 
-    // when woken up reset set last shot time to not cause sleep
+    // reset sleeping timers so we don't immediately go back to sleep
     timerDisplayOffMillis = TIMER_INACTIVE;
+
+    // record when display woke up so we can dim later
+    displayWakeMillis = millis();
+    displayDimmed = false;
+    // ensure full brightness on wake
+    setDisplayContrast(CONTRAST_NORMAL);
 
     Serial.println("Wake up");
   }
@@ -451,15 +527,15 @@ void updatePumpOnTime() {
       // no circle before grow window
       progress = 0.0f;
     } else if (t <= SHOT_ANIM_MAX_SECONDS) {
-      // grow from 0 to max between SHOT_ANIM_GROW_START_SECONDS and SHOT_ANIM_MAX_SECONDS
-      progress =
-          (t - SHOT_ANIM_GROW_START_SECONDS) /
-          (SHOT_ANIM_MAX_SECONDS - SHOT_ANIM_GROW_START_SECONDS);
+      // grow from 0 to max between SHOT_ANIM_GROW_START_SECONDS and
+      // SHOT_ANIM_MAX_SECONDS
+      progress = (t - SHOT_ANIM_GROW_START_SECONDS) /
+                 (SHOT_ANIM_MAX_SECONDS - SHOT_ANIM_GROW_START_SECONDS);
     } else if (t <= SHOT_ANIM_TOTAL_SECONDS) {
-      // shrink back to 0 between SHOT_ANIM_MAX_SECONDS and SHOT_ANIM_TOTAL_SECONDS
-      progress =
-          (SHOT_ANIM_TOTAL_SECONDS - t) /
-          (SHOT_ANIM_TOTAL_SECONDS - SHOT_ANIM_MAX_SECONDS);
+      // shrink back to 0 between SHOT_ANIM_MAX_SECONDS and
+      // SHOT_ANIM_TOTAL_SECONDS
+      progress = (SHOT_ANIM_TOTAL_SECONDS - t) /
+                 (SHOT_ANIM_TOTAL_SECONDS - SHOT_ANIM_MAX_SECONDS);
     } else {
       progress = 0.0f;
     }
@@ -482,10 +558,49 @@ void updatePumpOnTime() {
   }
 }
 
+bool isMidnightFlashPeriod() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return false;
+  }
+  int day = timeinfo.tm_mday;
+  // start flash when hour==0 and new day
+  if (day != lastFlashDay && timeinfo.tm_hour == 0) {
+    lastFlashDay = day;
+    flashStartMillis = millis();
+    flashing = true;
+    return true;
+  }
+  return false;
+}
+
 void updateDisplay() {
   display.clearDisplay();
 
+  // check for start of midnight flash
+  if (!flashing && isMidnightFlashPeriod()) {
+    // nothing else, will draw white below
+  }
+
   if (displayOn) {
+    // if we're in the flash window, just show white and skip everything else
+    if (flashing) {
+      if (millis() - flashStartMillis < (5 * 60 * 1000)) {
+        // keep white for 5 minutes
+        display.fillScreen(SCREEN_WHITE);
+        display.display();
+        return;
+      } else {
+        flashing = false;
+      }
+    }
+
+    // dim screen after being awake for 10 seconds
+    if (!displayDimmed && millis() - displayWakeMillis >= 10000) {
+      setDisplayContrast(CONTRAST_DIM);
+      displayDimmed = true;
+    }
+
     updatePumpOnTime();
 
     if (isShotTimerMode) {
@@ -507,16 +622,16 @@ void updateDisplay() {
       static uint8_t circleBuffer[bufferSize];
       static uint8_t timeBuffer[bufferSize];
 
-    // 1) Draw only the animated circle ring (2px wide) into the framebuffer
+      // 1) Draw only the animated circle ring (2px wide) into the framebuffer
       display.clearDisplay();
-    if (shotAnimRadius >= 2) {
-      // outer ring
-      display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y, shotAnimRadius,
-                         SCREEN_WHITE);
-      // inner ring for 2px stroke
-      display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y,
-                         shotAnimRadius - 1, SCREEN_WHITE);
-    }
+      if (shotAnimRadius >= 2) {
+        // outer ring
+        display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y,
+                           shotAnimRadius, SCREEN_WHITE);
+        // inner ring for 2px stroke
+        display.drawCircle(SHOT_ANIM_CENTER_X, SHOT_ANIM_CENTER_Y,
+                           shotAnimRadius - 1, SCREEN_WHITE);
+      }
       memcpy(circleBuffer, framebuffer, bufferSize);
 
       // 2) Draw only the time digits into the framebuffer
@@ -571,8 +686,8 @@ void updateDisplay() {
           display.drawBitmap(1, 1, coffeeIcon, COFFEE_ICON_WIDTH,
                              COFFEE_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "S") {
-          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH, STEAM_ICON_HEIGHT,
-                             SCREEN_WHITE);
+          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH,
+                             STEAM_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "X") {
           display.drawBitmap(1, 1, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
                              MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
