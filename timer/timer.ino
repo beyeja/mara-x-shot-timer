@@ -309,7 +309,6 @@ void loop() {
   updateShotTimerMode();
   readMachineInput();
   evalMachineMessage();
-  // display.dim(false);
 }
 
 // read machine serial message
@@ -677,20 +676,20 @@ void updateDisplay() {
       } else {
         // Draw WiFi indicator on right, aligned with C/S letter
         if (WiFi.status() == WL_CONNECTED) {
-          display.drawBitmap(display.width() - 16, 1, wifiIcon, WIFI_ICON_WIDTH,
+          display.drawBitmap(display.width() - 16, 0, wifiIcon, WIFI_ICON_WIDTH,
                              WIFI_ICON_HEIGHT, SCREEN_WHITE);
         }
 
         // draw machine prio mode state icon
         if (coffeeSteamMode == "C") {
-          display.drawBitmap(1, 1, coffeeIcon, COFFEE_ICON_WIDTH,
+          display.drawBitmap(0, 0, coffeeIcon, COFFEE_ICON_WIDTH,
                              COFFEE_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "S") {
-          display.drawBitmap(1, 1, steamIcon, STEAM_ICON_WIDTH,
-                             STEAM_ICON_HEIGHT, SCREEN_WHITE);
+          // display.drawBitmap(0, 0, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
+          //                    MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "X") {
-          display.drawBitmap(1, 1, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
-                             MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
+          display.drawBitmap(0, 0, steamIcon, STEAM_ICON_WIDTH,
+                             STEAM_ICON_HEIGHT, SCREEN_WHITE);
         }
 
         // draw heating mode

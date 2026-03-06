@@ -1,5 +1,7 @@
 # mara x shot timer
 
+![animation showing startup](/docs/animation.gif)
+
 ## features
 
 - show machine boiler and brew water temps
