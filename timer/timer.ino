@@ -295,8 +295,41 @@ void setup() {
   machineSerialInput.write(0x11);
 }
 
+// track last WiFi check time
+unsigned long lastWifiCheck = 0;
+#define WIFI_CHECK_INTERVAL 30000  // check every 30 seconds
+
 void loop() {
   ArduinoOTA.handle();
+
+  // Check WiFi connection periodically and reconnect if needed
+  if (millis() - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
+    lastWifiCheck = millis();
+    
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi disconnected, attempting to reconnect...");
+      WiFi.disconnect();
+      WiFi.reconnect();
+      
+      // Wait for reconnection
+      unsigned long startAttemptTime = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+        delay(500);
+        Serial.print(".");
+      }
+      
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi reconnected successfully!");
+        // Reconnect MQTT if it was configured
+        if (mqttConfigured) {
+          Serial.println("Reconnecting MQTT...");
+          mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD);
+        }
+      } else {
+        Serial.println("WiFi reconnection failed.");
+      }
+    }
+  }
 
   if (mqttConfigured) {
     mqtt.loop();
@@ -443,6 +476,8 @@ void detectPumpChanges() {
     if (mqttConfigured) {
       mqttPumpSensor.setValue("OFF");
     }
+
+    wakeForActivity();
   }
 }
 
@@ -594,8 +629,8 @@ void updateDisplay() {
       }
     }
 
-    // dim screen after being awake for 10 seconds
-    if (!displayDimmed && millis() - displayWakeMillis >= 10000) {
+    // dim screen after being awake for 10 seconds (but not if pump is running)
+    if (!displayDimmed && !pumpOn && millis() - displayWakeMillis >= 10000) {
       setDisplayContrast(CONTRAST_DIM);
       displayDimmed = true;
     }
