@@ -110,6 +110,10 @@ bool isShotTimerMode = false;    // display is in shot timer mode
 long displayWakeMillis = 0;
 bool displayDimmed = false;
 
+// track when WiFi connected to display IP briefly
+long wifiConnectMillis = 0;
+#define WIFI_IP_DISPLAY_DURATION 5000 // show IP for 5 seconds after connect
+
 // previous machine mode used to detect changes
 String prevCoffeeSteamMode = "";
 
@@ -219,42 +223,6 @@ void setup() {
   // Serial logging connection
   Serial.begin(115200);
 
-  // setup wifi connection
-  WiFi.disconnect();
-  Serial.println("Wifi: Connecting...");
-
-  // setup OTA updates
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname("esp-lelit-mara-timer");
-  WiFi.begin(ssid, password); // Connect to WiFi - defaults to WiFi Station mode
-  // configure NTP (UTC, adjust offset later with timezone if needed)
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-
-  // Ensure WiFi is connected
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("not connected, trying to connect to wifi...");
-    delay(500);
-  }
-  Serial.println("Wifi connected.");
-
-  // setup ota
-  ArduinoOTA.begin(); // Starts OTA
-  ArduinoOTA.setHostname("esp-lelit-mara-timer");
-  ArduinoOTA.setPassword(otaPassword);
-
-  // setup MQTT if a valid broker address is configured
-#ifdef MQTT_BROKER_ADDR
-  if (MQTT_BROKER_ADDR[0] != 0 || MQTT_BROKER_ADDR[1] != 0 ||
-      MQTT_BROKER_ADDR[2] != 0 || MQTT_BROKER_ADDR[3] != 0) {
-    mqttConfigured = true;
-    setupMQTT();
-  } else {
-    Serial.println("MQTT disabled: broker IP is 0.0.0.0");
-  }
-#else
-  Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
-#endif
-
   pinMode(PUMP_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -289,6 +257,43 @@ void setup() {
   displayWakeMillis = millis();
   displayDimmed = false;
 
+  // setup wifi connection (after white flash so IP is visible)
+  WiFi.disconnect();
+  Serial.println("Wifi: Connecting...");
+
+  // setup OTA updates
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname("esp-lelit-mara-timer");
+  WiFi.begin(ssid, password); // Connect to WiFi - defaults to WiFi Station mode
+  // configure NTP (UTC, adjust offset later with timezone if needed)
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+  // Ensure WiFi is connected
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("not connected, trying to connect to wifi...");
+    delay(500);
+  }
+  Serial.println("Wifi connected.");
+  wifiConnectMillis = millis();
+
+  // setup ota
+  ArduinoOTA.begin(); // Starts OTA
+  ArduinoOTA.setHostname("esp-lelit-mara-timer");
+  ArduinoOTA.setPassword(otaPassword);
+
+  // setup MQTT if a valid broker address is configured
+#ifdef MQTT_BROKER_ADDR
+  if (MQTT_BROKER_ADDR[0] != 0 || MQTT_BROKER_ADDR[1] != 0 ||
+      MQTT_BROKER_ADDR[2] != 0 || MQTT_BROKER_ADDR[3] != 0) {
+    mqttConfigured = true;
+    setupMQTT();
+  } else {
+    Serial.println("MQTT disabled: broker IP is 0.0.0.0");
+  }
+#else
+  Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
+#endif
+
   t.every(32, updateDisplay);
   t.every(1000, publishMQTTState);
 
@@ -297,7 +302,7 @@ void setup() {
 
 // track last WiFi check time
 unsigned long lastWifiCheck = 0;
-#define WIFI_CHECK_INTERVAL 30000  // check every 30 seconds
+#define WIFI_CHECK_INTERVAL 30000 // check every 30 seconds
 
 void loop() {
   ArduinoOTA.handle();
@@ -305,25 +310,28 @@ void loop() {
   // Check WiFi connection periodically and reconnect if needed
   if (millis() - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
     lastWifiCheck = millis();
-    
+
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("WiFi disconnected, attempting to reconnect...");
       WiFi.disconnect();
       WiFi.reconnect();
-      
+
       // Wait for reconnection
       unsigned long startAttemptTime = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+      while (WiFi.status() != WL_CONNECTED &&
+             millis() - startAttemptTime < 10000) {
         delay(500);
         Serial.print(".");
       }
-      
+
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("WiFi reconnected successfully!");
+        wifiConnectMillis = millis();
         // Reconnect MQTT if it was configured
         if (mqttConfigured) {
           Serial.println("Reconnecting MQTT...");
-          mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD);
+          mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME,
+                     MQTT_PASSWORD);
         }
       } else {
         Serial.println("WiFi reconnection failed.");
@@ -686,8 +694,12 @@ void updateDisplay() {
     } else {
       // draw dashboard
 
-      // divider
-      display.drawLine(74, 0, 74, 63, SCREEN_WHITE);
+      // divider - start below IP if IP is showing
+      bool showingIp =
+          (WiFi.status() == WL_CONNECTED &&
+           millis() - wifiConnectMillis < WIFI_IP_DISPLAY_DURATION);
+      int dividerStartY = showingIp ? 10 : 0;
+      display.drawLine(74, dividerStartY, 74, 63, SCREEN_WHITE);
 
       // draw time seconds
       display.setTextSize(4);
@@ -709,10 +721,17 @@ void updateDisplay() {
         display.setCursor(display.width() - 20, 0);
         display.printf("%0.0f", float(lastValueUpdate / 1000));
       } else {
-        // Draw WiFi indicator on right, aligned with C/S letter
+        // Draw WiFi indicator or IP address on right, aligned with C/S letter
         if (WiFi.status() == WL_CONNECTED) {
-          display.drawBitmap(display.width() - 16, 0, wifiIcon, WIFI_ICON_WIDTH,
-                             WIFI_ICON_HEIGHT, SCREEN_WHITE);
+          if (millis() - wifiConnectMillis < WIFI_IP_DISPLAY_DURATION) {
+            // Show IP address for 5 seconds after connecting
+            display.setTextSize(1);
+            display.setCursor(display.width() - 78, 0);
+            display.print(WiFi.localIP());
+          } else {
+            display.drawBitmap(display.width() - 16, 0, wifiIcon,
+                               WIFI_ICON_WIDTH, WIFI_ICON_HEIGHT, SCREEN_WHITE);
+          }
         }
 
         // draw machine prio mode state icon
@@ -729,11 +748,11 @@ void updateDisplay() {
 
         // draw heating mode
         if (isHeating) {
-          display.drawBitmap(45, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
+          display.drawBitmap(20, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
                              SCREEN_WHITE);
         }
         if (isHeatingBoost) {
-          display.drawBitmap(51, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
+          display.drawBitmap(40, 1, tempIcon, TEMP_ICON_WIDTH, TEMP_ICON_HEIGHT,
                              SCREEN_WHITE);
         }
 
