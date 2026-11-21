@@ -163,6 +163,7 @@ static byte ndx = 0;
 const char endMarker = '\n';
 
 void onMqttConnected() { Serial.println("MQTT connected!"); }
+void onMqttDisconnected() { Serial.println("MQTT disconnected"); }
 
 void publishMQTTState() {
   if (!mqttConfigured) {
@@ -210,13 +211,9 @@ void setupMQTT() {
   mqttSleep.setName("Sleep");
   mqttSleep.setIcon("mdi:sleep");
 
-  Serial.println("Starting MQTT...");
   mqtt.onConnected(onMqttConnected);
-  mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD);
-  Serial.print("MQTT broker: ");
-  Serial.print(MQTT_BROKER_ADDR);
-  Serial.print(":");
-  Serial.println(MQTT_BROKER_PORT);
+  mqtt.onDisconnected(onMqttDisconnected);
+  Serial.println("MQTT configured; connection will start after WiFi connects");
 }
 
 void setup() {
@@ -268,13 +265,7 @@ void setup() {
   // configure NTP (UTC, adjust offset later with timezone if needed)
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
-  // Ensure WiFi is connected
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("not connected, trying to connect to wifi...");
-    delay(500);
-  }
-  Serial.println("Wifi connected.");
-  wifiConnectMillis = millis();
+  Serial.println("WiFi connection is starting asynchronously");
 
   // setup ota
   ArduinoOTA.begin(); // Starts OTA
@@ -303,44 +294,48 @@ void setup() {
 // track last WiFi check time
 unsigned long lastWifiCheck = 0;
 #define WIFI_CHECK_INTERVAL 30000 // check every 30 seconds
+bool lastWifiConnected = false;
+bool mqttStarted = false;
 
 void loop() {
   ArduinoOTA.handle();
 
-  // Check WiFi connection periodically and reconnect if needed
-  if (millis() - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
-    lastWifiCheck = millis();
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
 
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi disconnected, attempting to reconnect...");
-      WiFi.disconnect();
-      WiFi.reconnect();
+  // MQTT can only start after Wi-Fi is available. Its loop then manages
+  // broker reconnection automatically, including after Home Assistant restarts.
+  if (wifiConnected && !lastWifiConnected) {
+    Serial.println("WiFi connected.");
+    wifiConnectMillis = millis();
 
-      // Wait for reconnection
-      unsigned long startAttemptTime = millis();
-      while (WiFi.status() != WL_CONNECTED &&
-             millis() - startAttemptTime < 10000) {
-        delay(500);
-        Serial.print(".");
-      }
-
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("WiFi reconnected successfully!");
-        wifiConnectMillis = millis();
-        // Reconnect MQTT if it was configured
-        if (mqttConfigured) {
-          Serial.println("Reconnecting MQTT...");
-          mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME,
-                     MQTT_PASSWORD);
-        }
-      } else {
-        Serial.println("WiFi reconnection failed.");
+    if (mqttConfigured) {
+      if (!mqttStarted) {
+        Serial.println("Starting MQTT...");
+        mqtt.begin(MQTT_BROKER_ADDR, MQTT_BROKER_PORT, MQTT_USERNAME,
+                   MQTT_PASSWORD);
+        mqttStarted = true;
+        Serial.print("MQTT broker: ");
+        Serial.print(MQTT_BROKER_ADDR);
+        Serial.print(":");
+        Serial.println(MQTT_BROKER_PORT);
       }
     }
   }
 
-  if (mqttConfigured) {
+  lastWifiConnected = wifiConnected;
+
+  if (mqttConfigured && wifiConnected) {
     mqtt.loop();
+  }
+
+  // Check WiFi periodically without blocking the machine timer or display.
+  if (millis() - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
+    lastWifiCheck = millis();
+
+    if (!wifiConnected) {
+      Serial.println("WiFi disconnected, attempting to reconnect...");
+      WiFi.reconnect();
+    }
   }
 
   t.update();
