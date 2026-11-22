@@ -46,7 +46,7 @@ WiFiClient client;
 #include "secrets.h" // your secrets for wifi connection
 #include <ArduinoHA.h>
 
-#include "bookooScale.h" // BLE scale integration (proof of concept)
+#include "bookooScale.h" // BLE scale integration
 
 // icons and animations
 #include "coffeeAnimation.h"
@@ -107,6 +107,10 @@ float pumpOnTimeSec = 0;         // time of pump on
 long lastSerialUpdatedValue = 0; // time of last update of machine serial
 float lastShotTimeSec = 0;       // time of last pump on time considered a shot
 bool isShotTimerMode = false;    // display is in shot timer mode
+// scale-driven: extraction is running (shot mode stays on until the scale
+// finishes); stays false when no scale data arrives so nothing gets stuck
+bool extractionActive = false;
+float pumpShotTimeSec = 0;       // pump run time of the current/last shot
 
 // track when the screen was last woken and whether it's been dimmed
 long displayWakeMillis = 0;
@@ -287,9 +291,7 @@ void setup() {
   Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
 #endif
 
-#if BOOKOO_ENABLED
   bookooSetup();
-#endif
 
   t.every(32, updateDisplay);
   t.every(1000, publishMQTTState);
@@ -352,9 +354,7 @@ void loop() {
   readMachineInput();
   evalMachineMessage();
 
-#if BOOKOO_ENABLED
   bookooLoop();
-#endif
 }
 
 // read machine serial message
@@ -495,13 +495,35 @@ void detectPumpChanges() {
 }
 
 void updateShotTimerMode() {
-  if (!isShotTimerMode && pumpOn) {
+  // track extraction state from the scale (shot mode extends until the
+  // scale finishes its shot)
+  if (bookooConsumeExtractionStarted()) {
+    extractionActive = true;
+  }
+  if (bookooConsumeExtractionStopped()) {
+    extractionActive = false;
+  }
+  // a lost/stale scale must never keep the shot timer stuck on screen
+  if (!bookooConnected || !bookooHasData) {
+    extractionActive = false;
+  }
+
+  if (!isShotTimerMode && (pumpOn || extractionActive)) {
     timerStartMillis = millis();
     isShotTimerMode = true;
     timerStopMillis = 0;
+    pumpShotTimeSec = 0;
   }
 
-  if (isShotTimerMode && !pumpOn) {
+  // latch the pump run time when the pump stops mid-shot (shot mode may
+  // continue while the scale still finishes its extraction)
+  static bool prevPumpOn = false;
+  if (prevPumpOn && !pumpOn && isShotTimerMode) {
+    pumpShotTimeSec = pumpOnTimeSec;
+  }
+  prevPumpOn = pumpOn;
+
+  if (isShotTimerMode && !pumpOn && !extractionActive) {
     timerStopMillis = millis();
     isShotTimerMode = false;
   }
@@ -566,8 +588,12 @@ void updatePumpOnTime() {
       lastShotTimeSec = pumpOnTimeSec;
     }
 
-    // compute animation radius based on current shot time
+    // compute animation radius based on the dominant shot clock (the
+    // extraction time when the scale is timing, otherwise the pump time)
     float t = pumpOnTimeSec;
+    if (extractionActive) {
+      t = (float)bookooElapsedMs / 1000.0f;
+    }
     float progress = 0.0f;
 
     if (t <= SHOT_ANIM_GROW_START_SECONDS) {
@@ -642,8 +668,9 @@ void updateDisplay() {
       }
     }
 
-    // dim screen after being awake for 10 seconds (but not if pump is running)
-    if (!displayDimmed && !pumpOn && millis() - displayWakeMillis >= 10000) {
+    // dim screen after 10s awake (not while pump or extraction is running)
+    if (!displayDimmed && !pumpOn && !extractionActive &&
+        millis() - displayWakeMillis >= 10000) {
       setDisplayContrast(CONTRAST_DIM);
       displayDimmed = true;
     }
@@ -651,9 +678,17 @@ void updateDisplay() {
     updatePumpOnTime();
 
     if (isShotTimerMode) {
+      // dominant clock: extraction time while the scale is timing (and
+      // connected), otherwise the pump time
+      float dominantSec = pumpOnTimeSec;
+      bool showExtraction = extractionActive && bookooHasData;
+      if (showExtraction) {
+        dominantSec = (float)bookooElapsedMs / 1000.0f;
+      }
+
       // prepare time components once for this frame
       double secFractions, seconds;
-      secFractions = modf(pumpOnTimeSec, &seconds);
+      secFractions = modf(dominantSec, &seconds);
       secFractions = secFractions * 10;
       secFractions = static_cast<int>(secFractions);
 
@@ -696,6 +731,28 @@ void updateDisplay() {
       for (size_t i = 0; i < bufferSize; i++) {
         framebuffer[i] = circleBuffer[i] ^ timeBuffer[i];
       }
+
+      // 4) overlay: tiny labels + weight (drawn after the XOR merge so the
+      // animated ring stays behind the text)
+      display.setTextSize(1);
+      if (showExtraction) {
+        // what the dominant clock means + secondary pump time
+        display.setCursor(2, 2);
+        display.print("Extr");
+        display.setCursor(SCREEN_WIDTH - 62, 2); // "Pump 123.4" right-aligned
+        display.printf("Pump %0.1f", pumpOnTimeSec);
+      }
+
+      // live weight, bottom center - placeholder when nothing is arriving
+      char weightBuf[12];
+      if (bookooHasData) {
+        snprintf(weightBuf, sizeof(weightBuf), "%0.1f g", bookooWeightG);
+      } else {
+        snprintf(weightBuf, sizeof(weightBuf), "--.- g");
+      }
+      display.setTextSize(2);
+      display.setCursor((SCREEN_WIDTH - (int)strlen(weightBuf) * 12) / 2, 48);
+      display.print(weightBuf);
     } else {
       // draw dashboard
 
@@ -706,10 +763,14 @@ void updateDisplay() {
       int dividerStartY = showingIp ? 10 : 0;
       display.drawLine(74, dividerStartY, 74, 63, SCREEN_WHITE);
 
-      // draw time seconds
+      // draw last shot/extraction time
       display.setTextSize(4);
       display.setCursor(display.width() / 2 - 1 + 17, 20);
-      display.printf("%02.0f", lastShotTimeSec);
+      if (bookooLastShotValid) {
+        display.printf("%02.0f", bookooLastShotMs / 1000.0f);
+      } else {
+        display.printf("%02.0f", lastShotTimeSec);
+      }
 
       // Machine not responding for >1s - show coffee animation and time since
       // last contact This acts as a "going to sleep" / connection lost
@@ -781,29 +842,40 @@ void updateDisplay() {
           display.print("C");
         }
       }
-    }
 
-#if BOOKOO_ENABLED
-    // BOOKOO scale HUD: weight + scale timer on the bottom edge (right of
-    // the vertical divider, out of the way of temps/shot time). Always
-    // drawn - shows placeholders when no data is arriving so a missing
-    // value is visibly different from "not drawn at all".
-    display.setTextSize(1);
-    display.setCursor(76, 49);
-    if (bookooHasData) {
-      display.printf("%0.1fg", bookooWeightG);
-    } else {
-      display.print("null");
+      // scale rows, bottom right of the divider
+      display.setTextSize(1);
+      if (bookooLastShotValid) {
+        // last-shot summary (extraction time is the big number above):
+        // pump run time + weight (live while connected so it can settle,
+        // latched final value otherwise)
+        display.setCursor(76, 49);
+        display.printf("Pump %0.0fs", pumpShotTimeSec);
+        display.setCursor(76, 57);
+        if (bookooHasData) {
+          display.printf("%0.1f g", bookooWeightG);
+        } else {
+          display.printf("%0.1f g", bookooLastShotG);
+        }
+      } else {
+        // live scale view - placeholders when no data is arriving so a
+        // missing value is visibly different from "not drawn at all"
+        display.setCursor(76, 49);
+        if (bookooHasData) {
+          display.printf("%0.1f g", bookooWeightG);
+        } else {
+          display.print("null");
+        }
+        display.setCursor(76, 57);
+        if (bookooHasData) {
+          unsigned int scaleMin = bookooElapsedMs / 60000;
+          unsigned int scaleSec = (bookooElapsedMs / 1000) % 60;
+          display.printf("%u:%02u", scaleMin, scaleSec);
+        } else {
+          display.print("--:--");
+        }
+      }
     }
-    display.setCursor(76, 57);
-    if (bookooHasData) {
-      unsigned int scaleMin = bookooElapsedMs / 60000;
-      unsigned int scaleSec = (bookooElapsedMs / 1000) % 60;
-      display.printf("%u:%02u", scaleMin, scaleSec);
-    } else {
-      display.print("--:--");
-    }
-#endif
   }
 
   display.display();
