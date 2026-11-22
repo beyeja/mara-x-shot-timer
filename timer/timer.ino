@@ -782,10 +782,25 @@ void updateDisplay() {
       // draw last shot/extraction time
       display.setTextSize(4);
       display.setCursor(display.width() / 2 - 1 + 17, 20);
+      display.printf("%02.0f", lastShotTimeSec);
+      
+      // scale rows, bottom right of the divider
+      display.setTextSize(1);
       if (bookooLastShotValid) {
-        display.printf("%02.0f", bookooLastShotMs / 1000.0f);
+        display.setCursor(76, 49);
+        display.print("Shot");
+        display.setCursor(85, 49);
+        display.printf("%0.0fs", bookooLastShotG);
+
+        display.setCursor(85, 57);
+        display.printf("%0.1f g", bookooLastShotG);
       } else {
-        display.printf("%02.0f", lastShotTimeSec);
+        display.setCursor(76, 57);
+        if (bookooHasData) {
+          display.printf("%0.1f g", bookooWeightG);
+        } else {
+          display.print("--,--g");
+        }
       }
 
       // Machine not responding for >1s - show coffee animation and time since
@@ -857,39 +872,6 @@ void updateDisplay() {
           display.setTextSize(1);
           display.print((char)247); // ˚-char
           display.print("C");
-        }
-      }
-
-      // scale rows, bottom right of the divider
-      display.setTextSize(1);
-      if (bookooLastShotValid) {
-        // last-shot summary (extraction time is the big number above):
-        // pump run time + weight (live while connected so it can settle,
-        // latched final value otherwise)
-        display.setCursor(76, 49);
-        display.printf("Shot %0.0fs", bookooLastShotG);
-        display.setCursor(76, 57);
-        if (bookooHasData) {
-          display.printf("%0.1f g", bookooWeightG);
-        } else {
-          display.printf("%0.1f g", bookooLastShotG);
-        }
-      } else {
-        // live scale view - placeholders when no data is arriving so a
-        // missing value is visibly different from "not drawn at all"
-        display.setCursor(76, 49);
-        if (bookooHasData) {
-          display.printf("%0.1f g", bookooWeightG);
-        } else {
-          display.print("null");
-        }
-        display.setCursor(76, 57);
-        if (bookooHasData) {
-          unsigned int scaleMin = bookooElapsedMs / 60000;
-          unsigned int scaleSec = (bookooElapsedMs / 1000) % 60;
-          display.printf("%u:%02u", scaleMin, scaleSec);
-        } else {
-          display.print("--:--");
         }
       }
     }
