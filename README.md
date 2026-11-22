@@ -14,8 +14,8 @@
 - OTA updates
 - case for sticking to back of machine
 - **MQTT integration** for home automation (see below for details)
-- **BLE scale integration** (POC): live weight + scale timer from a BOOKOO
-  Themis scale via Bluetooth (see below for details)
+- **BLE scale integration**: live weight, extraction time and finished-shot
+  summary from a BOOKOO Themis scale via Bluetooth (see below for details)
 - screen‑saver: automatic dimming, sleep and daily white‑flash to reduce OLED burn‑in
 
 ## MQTT Integration
@@ -50,16 +50,15 @@ Assistant or any other MQTT consumer.
 
 For more info on the data format see the comments in `timer.ino`.
 
-## BOOKOO scale integration (proof of concept)
+## BOOKOO scale integration
 
-The timer can connect over Bluetooth Low Energy to a BOOKOO Themis Ultra
-espresso scale (protocol: https://github.com/BooKooCode/OpenSource) and
-shows the live weight and the scale's own timer on the bottom edge of the
-display. The values show `null` / `--:--` placeholders until data arrives,
-so an absent value is visibly different from "not drawn at all".
+Connects over Bluetooth Low Energy to a BOOKOO Themis Ultra espresso scale
+(protocol: https://github.com/BooKooCode/OpenSource).
 
-- enabled by default; set `BOOKOO_ENABLED` to `0` in `timer/bookooScale.h`
-  to build without it (and fit the default partition scheme again)
+- in shot timer mode the scale's extraction time becomes the dominant clock
+  (with pump time + live weight around it) until the scale finishes its shot
+- the dashboard shows live weight / scale timer, and after a shot the final
+  extraction time, pump time and weight
 - no extra library needed - BLE support ships with the esp32 arduino core (4.x)
 
 ### flash size note
