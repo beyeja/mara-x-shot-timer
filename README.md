@@ -112,14 +112,14 @@ The firmware includes several features designed to slow OLED aging:
 install the following libraries from the library manager (latest version is
 fine for all of them, except where noted):
 
-| library (exact name)  | author               | notes                                  |
-| --------------------- | -------------------- | -------------------------------------- |
-| Adafruit GFX Library  | Adafruit             | display graphics core                  |
-| Adafruit SH110X       | Adafruit             | SH1106 OLED driver                     |
-| Adafruit SSD1306      | Adafruit             | accept "install dependencies" (BusIO)  |
-| EspSoftwareSerial     | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support) |
-| PubSubClient          | Nick O'Leary         | MQTT client (dependency of ArduinoHA)  |
-| BLE                   | Espressif (bundled)  | ships with esp32 core, nothing to install |
+| library (exact name) | author               | notes                                     |
+| -------------------- | -------------------- | ----------------------------------------- |
+| Adafruit GFX Library | Adafruit             | display graphics core                     |
+| Adafruit SH110X      | Adafruit             | SH1106 OLED driver                        |
+| Adafruit SSD1306     | Adafruit             | accept "install dependencies" (BusIO)     |
+| EspSoftwareSerial    | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support)    |
+| PubSubClient         | Nick O'Leary         | MQTT client (dependency of ArduinoHA)     |
+| BLE                  | Espressif (bundled)  | ships with esp32 core, nothing to install |
 
 two more libraries must be installed manually from github (run in the
 `libraries` folder of your arduino sketchbook):
@@ -154,8 +154,7 @@ for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
 
 ### 5. upload
 
-- set **tools → partition scheme → "Minimal SPIFFS (1.9MB APP with
-  OTA/190KB SPIFFS)"** (required for the BLE scale build)
+- set **tools → partition scheme → "Minimal SPIFFS (1.9MB APP with OTA)"**
 - the first upload to the devboard needs to happen via usb
   build and upload the sketch - see [docs/FLASHING.md](docs/FLASHING.md)
   for a step-by-step guide
