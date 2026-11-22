@@ -50,7 +50,7 @@ WiFiClient client;
 
 // icons and animations
 #include "coffeeAnimation.h"
-#include "coffeeIcon.h"
+#include "coffeeBeanIcon.h"
 #include "modeUnknownIcon.h"
 #include "steamIcon.h"
 #include "tempIcon.h"
@@ -741,7 +741,7 @@ void updateDisplay() {
 
         // draw machine prio mode state icon
         if (coffeeSteamMode == "C") {
-          display.drawBitmap(0, 0, coffeeIcon, COFFEE_ICON_WIDTH,
+          display.drawBitmap(0, 0, coffeeBeanIcon, COFFEE_ICON_WIDTH,
                              COFFEE_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "S") {
           // display.drawBitmap(0, 0, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
