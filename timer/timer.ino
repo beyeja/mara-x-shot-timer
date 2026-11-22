@@ -581,7 +581,11 @@ void detectSleep() {
 
 void updatePumpOnTime() {
   if (isShotTimerMode) {
-    pumpOnTimeSec = (float)(millis() - timerStartMillis) / 1000;
+    // pump time only advances while the pump is actually on - shot mode may
+    // continue on the scale's extraction after the pump has stopped
+    if (pumpOn) {
+      pumpOnTimeSec = (float)(millis() - timerStartMillis) / 1000;
+    }
 
     // store last time when above threshold
     if (pumpOnTimeSec > TIME_SHOT_LIMIT) {
