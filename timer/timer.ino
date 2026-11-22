@@ -157,6 +157,9 @@ bool mqttConfigured = false;
 // current radius of the shot timer background circle animation
 int shotAnimRadius = 0;
 
+// last time the coffee bean animation advanced a frame
+unsigned long lastBeanAdvanceMillis = 0;
+
 // time when pump sensor last changed, used to detect pump activity and when
 // pump turned off
 unsigned long timerLastPumpSensorChange = 0;
@@ -840,8 +843,12 @@ void updateDisplay() {
               0, 0, coffeeBeanAnimationFrames[coffeeBeanAnimationFrame],
               COFFEE_BEAN_ANIMATION_WIDTH, COFFEE_BEAN_ANIMATION_HEIGHT,
               SCREEN_WHITE);
-          coffeeBeanAnimationFrame = (coffeeBeanAnimationFrame + 1) %
-                                     COFFEE_BEAN_ANIMATION_FRAME_COUNT;
+          // advance the bean only at its own pace, not every display update
+          if (millis() - lastBeanAdvanceMillis >= COFFEE_BEAN_FRAME_MS) {
+            lastBeanAdvanceMillis = millis();
+            coffeeBeanAnimationFrame = (coffeeBeanAnimationFrame + 1) %
+                                       COFFEE_BEAN_ANIMATION_FRAME_COUNT;
+          }
         } else if (coffeeSteamMode == "S") {
           // display.drawBitmap(0, 0, modeUnknownIcon,
           // MODE_UNKNOWN_ICON_WIDTH,
