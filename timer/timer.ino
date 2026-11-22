@@ -50,7 +50,7 @@ WiFiClient client;
 
 // icons and animations
 #include "coffeeAnimation.h"
-#include "coffeeBeanIcon.h"
+#include "coffeeBeanAnimation.h"
 #include "modeUnknownIcon.h"
 #include "steamIcon.h"
 #include "tempIcon.h"
@@ -107,9 +107,9 @@ bool lastPumpOn = false;
 unsigned long pumpStartMillis = 0; // timestamp of the pump-on edge
 float pumpRunSec = 0;              // live duration of the current pump run
 float lastPumpRunSec = 0;          // duration latched when the pump stops
-long lastSerialUpdatedValue = 0; // time of last update of machine serial
-float lastShotTimeSec = 0;       // time of last pump on time considered a shot
-bool isShotTimerMode = false;    // display is in shot timer mode
+long lastSerialUpdatedValue = 0;   // time of last update of machine serial
+float lastShotTimeSec = 0;    // time of last pump on time considered a shot
+bool isShotTimerMode = false; // display is in shot timer mode
 // scale-driven: extraction is running (shot mode stays on until the scale
 // finishes); stays false when no scale data arrives so nothing gets stuck
 bool extractionActive = false;
@@ -783,23 +783,23 @@ void updateDisplay() {
       display.setTextSize(4);
       display.setCursor(display.width() / 2 - 1 + 17, 20);
       display.printf("%02.0f", lastShotTimeSec);
-      
+
       // scale rows, bottom right of the divider
       display.setTextSize(1);
       if (bookooLastShotValid) {
         display.setCursor(76, 49);
         display.print("Shot");
-        display.setCursor(85, 49);
+        display.setCursor(100, 49);
         display.printf("%0.0fs", bookooLastShotG);
 
-        display.setCursor(85, 57);
+        display.setCursor(100, 57);
         display.printf("%0.1f g", bookooLastShotG);
       } else {
-        display.setCursor(76, 57);
+        display.setCursor(90, 57);
         if (bookooHasData) {
           display.printf("%0.1f g", bookooWeightG);
         } else {
-          display.print("--,--g");
+          display.print("--,--");
         }
       }
 
@@ -810,9 +810,10 @@ void updateDisplay() {
       if (lastValueUpdate > 1000) {
         // drawBitmap(x position, y position, bitmap data, bitmap width,
         // bitmap height, color)
-        display.drawBitmap(0, 0, coffeeFrames[coffeeFrame], COFFEE_FRAME_WIDTH,
-                           COFFEE_FRAME_HEIGHT, SCREEN_WHITE);
-        coffeeFrame = (coffeeFrame + 1) % COFFEE_FRAME_COUNT;
+        display.drawBitmap(0, 0, coffeeAnimationFrames[coffeeAnimationFrame],
+                           COFFEE_FRAME_WIDTH, COFFEE_FRAME_HEIGHT,
+                           SCREEN_WHITE);
+        coffeeAnimationFrame = (coffeeAnimationFrame + 1) % COFFEE_FRAME_COUNT;
 
         display.setTextSize(1);
         display.setCursor(display.width() - 20, 0);
@@ -833,8 +834,14 @@ void updateDisplay() {
 
         // draw machine prio mode state icon
         if (coffeeSteamMode == "C") {
-          display.drawBitmap(0, 0, coffeeBeanIcon, COFFEE_ICON_WIDTH,
-                             COFFEE_ICON_HEIGHT, SCREEN_WHITE);
+          // drawBitmap(x position, y position, bitmap data, bitmap width,
+          // bitmap height, color)
+          display.drawBitmap(
+              0, 0, coffeeBeanAnimationFrames[coffeeBeanAnimationFrame],
+              COFFEE_BEAN_ANIMATION_WIDTH, COFFEE_BEAN_ANIMATION_HEIGHT,
+              SCREEN_WHITE);
+          coffeeBeanAnimationFrame = (coffeeBeanAnimationFrame + 1) %
+                                     COFFEE_BEAN_ANIMATION_FRAME_COUNT;
         } else if (coffeeSteamMode == "S") {
           // display.drawBitmap(0, 0, modeUnknownIcon,
           // MODE_UNKNOWN_ICON_WIDTH,
