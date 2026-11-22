@@ -46,6 +46,8 @@ WiFiClient client;
 #include "secrets.h" // your secrets for wifi connection
 #include <ArduinoHA.h>
 
+#include "bookooScale.h" // BLE scale integration (proof of concept)
+
 // icons and animations
 #include "coffeeAnimation.h"
 #include "coffeeIcon.h"
@@ -285,6 +287,10 @@ void setup() {
   Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
 #endif
 
+#if BOOKOO_ENABLED
+  bookooSetup();
+#endif
+
   t.every(32, updateDisplay);
   t.every(1000, publishMQTTState);
 
@@ -345,6 +351,10 @@ void loop() {
   updateShotTimerMode();
   readMachineInput();
   evalMachineMessage();
+
+#if BOOKOO_ENABLED
+  bookooLoop();
+#endif
 }
 
 // read machine serial message
@@ -772,6 +782,28 @@ void updateDisplay() {
         }
       }
     }
+
+#if BOOKOO_ENABLED
+    // BOOKOO scale HUD: weight + scale timer on the bottom edge (right of
+    // the vertical divider, out of the way of temps/shot time). Always
+    // drawn - shows placeholders when no data is arriving so a missing
+    // value is visibly different from "not drawn at all".
+    display.setTextSize(1);
+    display.setCursor(76, 49);
+    if (bookooHasData) {
+      display.printf("%0.1fg", bookooWeightG);
+    } else {
+      display.print("null");
+    }
+    display.setCursor(76, 57);
+    if (bookooHasData) {
+      unsigned int scaleMin = bookooElapsedMs / 60000;
+      unsigned int scaleSec = (bookooElapsedMs / 1000) % 60;
+      display.printf("%u:%02u", scaleMin, scaleSec);
+    } else {
+      display.print("--:--");
+    }
+#endif
   }
 
   display.display();

@@ -14,6 +14,8 @@
 - OTA updates
 - case for sticking to back of machine
 - **MQTT integration** for home automation (see below for details)
+- **BLE scale integration** (POC): live weight + scale timer from a BOOKOO
+  Themis scale via Bluetooth (see below for details)
 - screen‑saver: automatic dimming, sleep and daily white‑flash to reduce OLED burn‑in
 
 ## MQTT Integration
@@ -47,6 +49,33 @@ Sensors update once per second and the device uses its unique ID
 Assistant or any other MQTT consumer.
 
 For more info on the data format see the comments in `timer.ino`.
+
+## BOOKOO scale integration (proof of concept)
+
+The timer can connect over Bluetooth Low Energy to a BOOKOO Themis Ultra
+espresso scale (protocol: https://github.com/BooKooCode/OpenSource) and
+shows the live weight and the scale's own timer on the bottom edge of the
+display. The values show `null` / `--:--` placeholders until data arrives,
+so an absent value is visibly different from "not drawn at all".
+
+- enabled by default; set `BOOKOO_ENABLED` to `0` in `timer/bookooScale.h`
+  to build without it (and fit the default partition scheme again)
+- no extra library needed - BLE support ships with the esp32 arduino core (4.x)
+
+### flash size note
+
+enabling BLE grows the firmware past the default partition scheme's app
+size. compile and upload with the `min_spiffs` partition scheme:
+
+```sh
+arduino-cli compile -b esp32:esp32:esp32c3:PartitionScheme=min_spiffs timer/
+arduino-cli upload -b esp32:esp32:esp32c3:PartitionScheme=min_spiffs -p COM3 timer/
+```
+
+a device that still runs the default partition scheme must be flashed with
+the new scheme **once via usb** - partition tables can't be changed over
+OTA. afterwards OTA updates work normally (min_spiffs has two ~1.9MB app
+slots).
 
 ## Screen saver & burn‑in protection
 
@@ -122,7 +151,9 @@ for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
 ### 5. upload
 
 - the first upload to the devboard needs to happen via usb
-  build and upload the sketch
+  build and upload the sketch - see [docs/FLASHING.md](docs/FLASHING.md)
+  for a step-by-step guide (incl. the `min_spiffs` partition scheme needed
+  for the BLE scale build)
 - afterwards updates work over-the-air (OTA)
 - connect
 
