@@ -64,27 +64,73 @@ The firmware includes several features designed to slow OLED aging:
 
 - fork and rewrite of https://github.com/alexrus/marax_timer
 - written for ESP32C3
-- needs ArduinoOTA Dependency
 
 ## initial setup
 
-- install arduino IDE
-  - install board support for esp32c3 dev module
-- add WIFI credentials to code
-  - add `secrets.h` file and add the following:
+### 1. install arduino IDE (2.x)
 
-    ```C++
-    #define WIFI_SSID "your wifi name/ssid"
-    #define WIFI_PW "your wifi password"
-    #define OTA_PW "your password for OTA updates"
-    ```
+### 2. install ESP32 board support
 
-  - alternatively you can add your credentials directly in timer.ino but be sure to not commit them to git
+- boards manager → install **"esp32" by Espressif Systems**
+- select board **"ESP32C3 Dev Module"**
+- ArduinoOTA is included in the esp32 core, no separate install needed
 
-- initial upload to devboard needs to happen via usb
+### 3. install libraries (tools → manage libraries)
+
+install the following libraries from the library manager (latest version is
+fine for all of them, except where noted):
+
+| library (exact name)  | author               | notes                                  |
+| --------------------- | -------------------- | -------------------------------------- |
+| Adafruit GFX Library  | Adafruit             | display graphics core                  |
+| Adafruit SH110X       | Adafruit             | SH1106 OLED driver                     |
+| Adafruit SSD1306      | Adafruit             | accept "install dependencies" (BusIO)  |
+| EspSoftwareSerial     | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support) |
+| arduino-timer         | Michael Contreras    | periodic display/MQTT callbacks        |
+| ArduinoHA             | Dawid Chyrzynski     | MQTT / home assistant integration      |
+
+### 4. create `timer/secrets.h`
+
+copy `timer/secrets.h.sample` to `timer/secrets.h` and fill in your values:
+
+```C++
+#define WIFI_SSID "your wifi name/ssid"
+#define WIFI_PW "your wifi password"
+#define OTA_PW "your password for OTA updates"
+```
+
+for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
+`IPAddress(0, 0, 0, 0)` to disable MQTT - see "MQTT Integration" above).
+
+> `secrets.h` is git-ignored, so it must be recreated on every new
+> machine/clone. alternatively you can add your credentials directly in
+> timer.ino but be sure to not commit them to git.
+
+### 5. upload
+
+- the first upload to the devboard needs to happen via usb
   build and upload the sketch
-
+- afterwards updates work over-the-air (OTA)
 - connect
+
+### alternative: arduino-cli
+
+instead of the arduino IDE you can use `arduino-cli`:
+
+```sh
+# install the esp32 core
+arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+# install the libraries
+arduino-cli lib install "Adafruit GFX Library" "Adafruit SH110X" "Adafruit SSD1306" EspSoftwareSerial arduino-timer ArduinoHA
+
+# compile and upload (replace COM3 with your port)
+arduino-cli compile -b esp32:esp32:esp32c3 timer/
+arduino-cli upload -b esp32:esp32:esp32c3 -p COM3 timer/
+```
+
+you still need to create `timer/secrets.h` as described above.
 
 ## Hardware
 
