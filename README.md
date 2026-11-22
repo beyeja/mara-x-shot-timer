@@ -86,8 +86,21 @@ fine for all of them, except where noted):
 | Adafruit SH110X       | Adafruit             | SH1106 OLED driver                     |
 | Adafruit SSD1306      | Adafruit             | accept "install dependencies" (BusIO)  |
 | EspSoftwareSerial     | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support) |
-| arduino-timer         | Michael Contreras    | periodic display/MQTT callbacks        |
-| ArduinoHA             | Dawid Chyrzynski     | MQTT / home assistant integration      |
+| PubSubClient          | Nick O'Leary         | MQTT client (dependency of ArduinoHA)  |
+
+two more libraries must be installed manually from github (run in the
+`libraries` folder of your arduino sketchbook):
+
+```powershell
+# Timer (scheduler for the periodic display/MQTT callbacks)
+# NOTE: the "Timer" library in the library manager is a DIFFERENT one, use this:
+git clone --depth 1 --branch v1.3 https://github.com/JChristensen/Timer.git Timer
+
+# ArduinoHA (MQTT / home assistant integration), not in the library manager:
+git clone --depth 1 --branch 2.1.0 https://github.com/dawidchyrzynski/arduino-home-assistant.git ArduinoHA
+```
+
+(alternatively download the release zips and extract them there)
 
 ### 4. create `timer/secrets.h`
 
@@ -122,8 +135,8 @@ instead of the arduino IDE you can use `arduino-cli`:
 arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 
-# install the libraries
-arduino-cli lib install "Adafruit GFX Library" "Adafruit SH110X" "Adafruit SSD1306" EspSoftwareSerial arduino-timer ArduinoHA
+# install the libraries (Timer + ArduinoHA must be installed manually, see above)
+arduino-cli lib install "Adafruit GFX Library" "Adafruit SH110X" "Adafruit SSD1306" EspSoftwareSerial PubSubClient
 
 # compile and upload (replace COM3 with your port)
 arduino-cli compile -b esp32:esp32:esp32c3 timer/
