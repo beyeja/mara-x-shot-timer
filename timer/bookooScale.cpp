@@ -146,8 +146,10 @@ static void startScan() {
   Serial.println("Bookoo: starting scan...");
   BLEScan scan = BLE.getScan();
   scan.setActiveScan(true);
-  scan.setInterval(100); // 100 * 0.625 ms = 62.5 ms
-  scan.setWindow(99);
+  // low duty cycle (~19%): keeps the shared 2.4GHz radio (WiFi coexistence)
+  // and the single CPU core responsive; still finds the scale in seconds
+  scan.setInterval(160); // 160 * 0.625 ms = 100 ms
+  scan.setWindow(30);    //  30 * 0.625 ms = ~19 ms
   scan.onResult(onDeviceFound);
   scan.start(0); // scan until stopped
 }

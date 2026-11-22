@@ -103,14 +103,16 @@ bool displayOn = true; // is display on
 // pump state save for activity detection (previously handled within
 // detectPumpChanges)
 bool lastPumpOn = false;
-float pumpOnTimeSec = 0;         // time of pump on
+// pump measurement - independent of display/shot-timer state
+unsigned long pumpStartMillis = 0; // timestamp of the pump-on edge
+float pumpRunSec = 0;              // live duration of the current pump run
+float lastPumpRunSec = 0;          // duration latched when the pump stops
 long lastSerialUpdatedValue = 0; // time of last update of machine serial
 float lastShotTimeSec = 0;       // time of last pump on time considered a shot
 bool isShotTimerMode = false;    // display is in shot timer mode
 // scale-driven: extraction is running (shot mode stays on until the scale
 // finishes); stays false when no scale data arrives so nothing gets stuck
 bool extractionActive = false;
-float pumpShotTimeSec = 0; // pump run time of the current/last shot
 
 // track when the screen was last woken and whether it's been dimmed
 long displayWakeMillis = 0;
@@ -140,7 +142,6 @@ bool isHeatingBoost = false;
 String temp = "";
 String steamTemp = "";
 
-long timerStartMillis = 0;
 long timerStopMillis = 0;
 long timerDisplayOffMillis = TIMER_INACTIVE;
 long lastSerialUpdateMillis = 0;
@@ -350,6 +351,7 @@ void loop() {
 
   detectSleep();
   detectPumpChanges();
+  updatePumpTimer();
   updateShotTimerMode();
   readMachineInput();
   evalMachineMessage();
@@ -477,6 +479,7 @@ void detectPumpChanges() {
       }
 
       pumpOn = true;
+      pumpStartMillis = millis(); // start the independent pump measurement
 
       // wake display for activity
       wakeForActivity();
@@ -485,6 +488,7 @@ void detectPumpChanges() {
     // when pump was on but now off for >500ms, consider pump off
 
     pumpOn = false;
+    lastPumpRunSec = pumpRunSec; // latch the finished pump run duration
     Serial.println("Pump OFF");
     if (mqttConfigured) {
       mqttPumpSensor.setValue("OFF");
@@ -509,23 +513,27 @@ void updateShotTimerMode() {
   }
 
   if (!isShotTimerMode && (pumpOn || extractionActive)) {
-    timerStartMillis = millis();
     isShotTimerMode = true;
     timerStopMillis = 0;
-    pumpShotTimeSec = 0;
   }
-
-  // latch the pump run time when the pump stops mid-shot (shot mode may
-  // continue while the scale still finishes its extraction)
-  static bool prevPumpOn = false;
-  if (prevPumpOn && !pumpOn && isShotTimerMode) {
-    pumpShotTimeSec = pumpOnTimeSec;
-  }
-  prevPumpOn = pumpOn;
 
   if (isShotTimerMode && !pumpOn && !extractionActive) {
     timerStopMillis = millis();
     isShotTimerMode = false;
+  }
+}
+
+// pump measurement - fully independent of the screen state. advances while
+// the pump is on, freezes when it stops (lastPumpRunSec is latched in
+// detectPumpChanges). no interaction with the shot timer mode.
+void updatePumpTimer() {
+  if (pumpOn) {
+    pumpRunSec = (float)(millis() - pumpStartMillis) / 1000;
+
+    // classic "long pump run = shot" bookkeeping (dashboard + MQTT)
+    if (pumpRunSec > TIME_SHOT_LIMIT) {
+      lastShotTimeSec = pumpRunSec;
+    }
   }
 }
 
@@ -561,7 +569,7 @@ void detectSleep() {
 
       // reset values to be cleared after wakeup
       timerDisplayOffMillis = TIMER_INACTIVE;
-      pumpOnTimeSec = 0;
+      pumpRunSec = 0;
       lastShotTimeSec = 0;
 
       // turn off screen
@@ -579,22 +587,11 @@ void detectSleep() {
   }
 }
 
-void updatePumpOnTime() {
+void updateShotAnimation() {
   if (isShotTimerMode) {
-    // pump time only advances while the pump is actually on - shot mode may
-    // continue on the scale's extraction after the pump has stopped
-    if (pumpOn) {
-      pumpOnTimeSec = (float)(millis() - timerStartMillis) / 1000;
-    }
-
-    // store last time when above threshold
-    if (pumpOnTimeSec > TIME_SHOT_LIMIT) {
-      lastShotTimeSec = pumpOnTimeSec;
-    }
-
     // compute animation radius based on the dominant shot clock (the
     // extraction time when the scale is timing, otherwise the pump time)
-    float t = pumpOnTimeSec;
+    float t = pumpRunSec;
     if (extractionActive) {
       t = (float)bookooElapsedMs / 1000.0f;
     }
@@ -630,7 +627,6 @@ void updatePumpOnTime() {
     }
     shotAnimRadius = radius;
   } else {
-    pumpOnTimeSec = lastShotTimeSec;
     shotAnimRadius = 0;
   }
 }
@@ -679,12 +675,12 @@ void updateDisplay() {
       displayDimmed = true;
     }
 
-    updatePumpOnTime();
+    updateShotAnimation();
 
     if (isShotTimerMode) {
       // dominant clock: extraction time while the scale is timing (and
       // connected), otherwise the pump time
-      float dominantSec = pumpOnTimeSec;
+      float dominantSec = pumpRunSec;
       bool showExtraction = extractionActive && bookooHasData;
       if (showExtraction) {
         dominantSec = (float)bookooElapsedMs / 1000.0f;
@@ -748,11 +744,11 @@ void updateDisplay() {
       if (showExtraction) {
         display.setTextSize(1);
         display.setCursor(SCREEN_WIDTH - 40, 2);
-        display.printf("Pump", pumpOnTimeSec);
+        display.printf("Pump", pumpRunSec);
 
         display.setCursor(SCREEN_WIDTH - 40, 14);
         display.setTextSize(2);
-        display.printf("%1.0f", pumpOnTimeSec);
+        display.printf("%1.0f", pumpRunSec);
         display.setTextSize(1);
         display.print("S");
       }
@@ -871,7 +867,7 @@ void updateDisplay() {
         // pump run time + weight (live while connected so it can settle,
         // latched final value otherwise)
         display.setCursor(76, 49);
-        display.printf("Pump %0.0fs", pumpShotTimeSec);
+        display.printf("Shot %0.0fs", bookooLastShotG);
         display.setCursor(76, 57);
         if (bookooHasData) {
           display.printf("%0.1f g", bookooWeightG);

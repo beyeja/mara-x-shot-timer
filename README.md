@@ -52,6 +52,8 @@ For more info on the data format see the comments in `timer.ino`.
 
 ## BOOKOO scale integration
 
+> disclaimer: this integration is vibe coded, but tested on real hardware.
+
 Connects over Bluetooth Low Energy to a BOOKOO Themis Ultra espresso scale
 (protocol: https://github.com/BooKooCode/OpenSource).
 
