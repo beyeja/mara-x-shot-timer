@@ -100,7 +100,10 @@ The firmware includes several features designed to slow OLED aging:
 
 ### 2. install ESP32 board support
 
-- boards manager → install **"esp32" by Espressif Systems**
+- add the espressif board index: **file → preferences → additional boards
+  manager URLs** → add
+  `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+- boards manager → install **"esp32" by Espressif Systems**, **version 4.x**
 - select board **"ESP32C3 Dev Module"**
 - ArduinoOTA is included in the esp32 core, no separate install needed
 
@@ -116,6 +119,7 @@ fine for all of them, except where noted):
 | Adafruit SSD1306      | Adafruit             | accept "install dependencies" (BusIO)  |
 | EspSoftwareSerial     | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support) |
 | PubSubClient          | Nick O'Leary         | MQTT client (dependency of ArduinoHA)  |
+| BLE                   | Espressif (bundled)  | ships with esp32 core, nothing to install |
 
 two more libraries must be installed manually from github (run in the
 `libraries` folder of your arduino sketchbook):
@@ -150,10 +154,11 @@ for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
 
 ### 5. upload
 
+- set **tools → partition scheme → "Minimal SPIFFS (1.9MB APP with
+  OTA/190KB SPIFFS)"** (required for the BLE scale build)
 - the first upload to the devboard needs to happen via usb
   build and upload the sketch - see [docs/FLASHING.md](docs/FLASHING.md)
-  for a step-by-step guide (incl. the `min_spiffs` partition scheme needed
-  for the BLE scale build)
+  for a step-by-step guide
 - afterwards updates work over-the-air (OTA)
 - connect
 
@@ -162,7 +167,7 @@ for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
 instead of the arduino IDE you can use `arduino-cli`:
 
 ```sh
-# install the esp32 core
+# install the esp32 core (4.x)
 arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
 
