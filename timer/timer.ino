@@ -110,7 +110,7 @@ bool isShotTimerMode = false;    // display is in shot timer mode
 // scale-driven: extraction is running (shot mode stays on until the scale
 // finishes); stays false when no scale data arrives so nothing gets stuck
 bool extractionActive = false;
-float pumpShotTimeSec = 0;       // pump run time of the current/last shot
+float pumpShotTimeSec = 0; // pump run time of the current/last shot
 
 // track when the screen was last woken and whether it's been dimmed
 long displayWakeMillis = 0;
@@ -704,7 +704,7 @@ void updateDisplay() {
       static uint8_t circleBuffer[bufferSize];
       static uint8_t timeBuffer[bufferSize];
 
-      // 1) Draw only the animated circle ring (2px wide) into the framebuffer
+      // Draw only the animated circle ring (2px wide) into the framebuffer
       display.clearDisplay();
       if (shotAnimRadius >= 2) {
         // outer ring
@@ -716,31 +716,41 @@ void updateDisplay() {
       }
       memcpy(circleBuffer, framebuffer, bufferSize);
 
-      // 2) Draw only the time digits into the framebuffer
       display.clearDisplay();
-      display.setTextSize(4);
-      display.setCursor(20, 14);
-      display.printf("%02.0f", seconds);
 
-      display.setTextSize(2);
-      display.printf(".%1.0f", secFractions);
-      display.print("s");
-      memcpy(timeBuffer, framebuffer, bufferSize);
+      // Draw primary timevalue into the framebuffer
+      if (showExtraction) {
+        display.setTextSize(1);
+        display.setCursor(0, 2);
+        display.print("Extr:");
 
-      // 3) XOR circle and time into the final framebuffer
-      for (size_t i = 0; i < bufferSize; i++) {
-        framebuffer[i] = circleBuffer[i] ^ timeBuffer[i];
+        display.setTextSize(3);
+        display.setCursor(0, 14);
+        display.printf("%02.0f", seconds);
+
+        display.setTextSize(2);
+        display.printf("%1.0f", secFractions);
+        display.print("s");
+      } else {
+        display.setTextSize(4);
+        display.setCursor(20, 14);
+        display.printf("%02.0f", seconds);
+
+        display.setTextSize(2);
+        display.printf(".%1.0fs", secFractions);
       }
 
-      // 4) overlay: tiny labels + weight (drawn after the XOR merge so the
-      // animated ring stays behind the text)
-      display.setTextSize(1);
+      // render small pump timer
       if (showExtraction) {
-        // what the dominant clock means + secondary pump time
-        display.setCursor(2, 2);
-        display.print("Extr");
-        display.setCursor(SCREEN_WIDTH - 62, 2); // "Pump 123.4" right-aligned
-        display.printf("Pump %0.1f", pumpOnTimeSec);
+        display.setTextSize(1);
+        display.setCursor(SCREEN_WIDTH - 40, 2);
+        display.printf("Pump", pumpOnTimeSec);
+
+        display.setCursor(SCREEN_WIDTH - 40, 14);
+        display.setTextSize(2);
+        display.printf("%1.0f", pumpOnTimeSec);
+        display.setTextSize(1);
+        display.print("S");
       }
 
       // live weight, bottom center - placeholder when nothing is arriving
@@ -753,6 +763,12 @@ void updateDisplay() {
       display.setTextSize(2);
       display.setCursor((SCREEN_WIDTH - (int)strlen(weightBuf) * 12) / 2, 48);
       display.print(weightBuf);
+
+      memcpy(timeBuffer, framebuffer, bufferSize);
+      // XOR circle and time into the final framebuffer
+      for (size_t i = 0; i < bufferSize; i++) {
+        framebuffer[i] = circleBuffer[i] ^ timeBuffer[i];
+      }
     } else {
       // draw dashboard
 
@@ -777,8 +793,8 @@ void updateDisplay() {
       // indicator
       long lastValueUpdate = millis() - lastSerialUpdatedValue;
       if (lastValueUpdate > 1000) {
-        // drawBitmap(x position, y position, bitmap data, bitmap width, bitmap
-        // height, color)
+        // drawBitmap(x position, y position, bitmap data, bitmap width,
+        // bitmap height, color)
         display.drawBitmap(0, 0, coffeeFrames[coffeeFrame], COFFEE_FRAME_WIDTH,
                            COFFEE_FRAME_HEIGHT, SCREEN_WHITE);
         coffeeFrame = (coffeeFrame + 1) % COFFEE_FRAME_COUNT;
@@ -805,7 +821,8 @@ void updateDisplay() {
           display.drawBitmap(0, 0, coffeeBeanIcon, COFFEE_ICON_WIDTH,
                              COFFEE_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "S") {
-          // display.drawBitmap(0, 0, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
+          // display.drawBitmap(0, 0, modeUnknownIcon,
+          // MODE_UNKNOWN_ICON_WIDTH,
           //                    MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "X") {
           display.drawBitmap(0, 0, steamIcon, STEAM_ICON_WIDTH,
