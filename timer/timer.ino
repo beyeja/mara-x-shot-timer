@@ -46,9 +46,11 @@ WiFiClient client;
 #include "secrets.h" // your secrets for wifi connection
 #include <ArduinoHA.h>
 
+#include "bookooScale.h" // BLE scale integration
+
 // icons and animations
 #include "coffeeAnimation.h"
-#include "coffeeIcon.h"
+#include "coffeeBeanAnimation.h"
 #include "modeUnknownIcon.h"
 #include "steamIcon.h"
 #include "tempIcon.h"
@@ -101,10 +103,16 @@ bool displayOn = true; // is display on
 // pump state save for activity detection (previously handled within
 // detectPumpChanges)
 bool lastPumpOn = false;
-float pumpOnTimeSec = 0;         // time of pump on
-long lastSerialUpdatedValue = 0; // time of last update of machine serial
-float lastShotTimeSec = 0;       // time of last pump on time considered a shot
-bool isShotTimerMode = false;    // display is in shot timer mode
+// pump measurement - independent of display/shot-timer state
+unsigned long pumpStartMillis = 0; // timestamp of the pump-on edge
+float pumpRunSec = 0;              // live duration of the current pump run
+float lastPumpRunSec = 0;          // duration latched when the pump stops
+long lastSerialUpdatedValue = 0;   // time of last update of machine serial
+float lastShotTimeSec = 0;    // time of last pump on time considered a shot
+bool isShotTimerMode = false; // display is in shot timer mode
+// scale-driven: extraction is running (shot mode stays on until the scale
+// finishes); stays false when no scale data arrives so nothing gets stuck
+bool extractionActive = false;
 
 // track when the screen was last woken and whether it's been dimmed
 long displayWakeMillis = 0;
@@ -134,7 +142,6 @@ bool isHeatingBoost = false;
 String temp = "";
 String steamTemp = "";
 
-long timerStartMillis = 0;
 long timerStopMillis = 0;
 long timerDisplayOffMillis = TIMER_INACTIVE;
 long lastSerialUpdateMillis = 0;
@@ -149,6 +156,9 @@ bool mqttConfigured = false;
 
 // current radius of the shot timer background circle animation
 int shotAnimRadius = 0;
+
+// last time the coffee bean animation advanced a frame
+unsigned long lastBeanAdvanceMillis = 0;
 
 // time when pump sensor last changed, used to detect pump activity and when
 // pump turned off
@@ -285,6 +295,8 @@ void setup() {
   Serial.println("MQTT disabled: MQTT_BROKER_ADDR not defined");
 #endif
 
+  bookooSetup();
+
   t.every(32, updateDisplay);
   t.every(1000, publishMQTTState);
 
@@ -342,9 +354,12 @@ void loop() {
 
   detectSleep();
   detectPumpChanges();
+  updatePumpTimer();
   updateShotTimerMode();
   readMachineInput();
   evalMachineMessage();
+
+  bookooLoop();
 }
 
 // read machine serial message
@@ -467,6 +482,7 @@ void detectPumpChanges() {
       }
 
       pumpOn = true;
+      pumpStartMillis = millis(); // start the independent pump measurement
 
       // wake display for activity
       wakeForActivity();
@@ -475,6 +491,7 @@ void detectPumpChanges() {
     // when pump was on but now off for >500ms, consider pump off
 
     pumpOn = false;
+    lastPumpRunSec = pumpRunSec; // latch the finished pump run duration
     Serial.println("Pump OFF");
     if (mqttConfigured) {
       mqttPumpSensor.setValue("OFF");
@@ -485,15 +502,41 @@ void detectPumpChanges() {
 }
 
 void updateShotTimerMode() {
-  if (!isShotTimerMode && pumpOn) {
-    timerStartMillis = millis();
+  // track extraction state from the scale (shot mode extends until the
+  // scale finishes its shot)
+  if (bookooConsumeExtractionStarted()) {
+    extractionActive = true;
+  }
+  if (bookooConsumeExtractionStopped()) {
+    extractionActive = false;
+  }
+  // a lost/stale scale must never keep the shot timer stuck on screen
+  if (!bookooConnected || !bookooHasData) {
+    extractionActive = false;
+  }
+
+  if (!isShotTimerMode && (pumpOn || extractionActive)) {
     isShotTimerMode = true;
     timerStopMillis = 0;
   }
 
-  if (isShotTimerMode && !pumpOn) {
+  if (isShotTimerMode && !pumpOn && !extractionActive) {
     timerStopMillis = millis();
     isShotTimerMode = false;
+  }
+}
+
+// pump measurement - fully independent of the screen state. advances while
+// the pump is on, freezes when it stops (lastPumpRunSec is latched in
+// detectPumpChanges). no interaction with the shot timer mode.
+void updatePumpTimer() {
+  if (pumpOn) {
+    pumpRunSec = (float)(millis() - pumpStartMillis) / 1000;
+
+    // classic "long pump run = shot" bookkeeping (dashboard + MQTT)
+    if (pumpRunSec > TIME_SHOT_LIMIT) {
+      lastShotTimeSec = pumpRunSec;
+    }
   }
 }
 
@@ -529,7 +572,7 @@ void detectSleep() {
 
       // reset values to be cleared after wakeup
       timerDisplayOffMillis = TIMER_INACTIVE;
-      pumpOnTimeSec = 0;
+      pumpRunSec = 0;
       lastShotTimeSec = 0;
 
       // turn off screen
@@ -547,17 +590,14 @@ void detectSleep() {
   }
 }
 
-void updatePumpOnTime() {
+void updateShotAnimation() {
   if (isShotTimerMode) {
-    pumpOnTimeSec = (float)(millis() - timerStartMillis) / 1000;
-
-    // store last time when above threshold
-    if (pumpOnTimeSec > TIME_SHOT_LIMIT) {
-      lastShotTimeSec = pumpOnTimeSec;
+    // compute animation radius based on the dominant shot clock (the
+    // extraction time when the scale is timing, otherwise the pump time)
+    float t = pumpRunSec;
+    if (extractionActive) {
+      t = (float)bookooElapsedMs / 1000.0f;
     }
-
-    // compute animation radius based on current shot time
-    float t = pumpOnTimeSec;
     float progress = 0.0f;
 
     if (t <= SHOT_ANIM_GROW_START_SECONDS) {
@@ -590,7 +630,6 @@ void updatePumpOnTime() {
     }
     shotAnimRadius = radius;
   } else {
-    pumpOnTimeSec = lastShotTimeSec;
     shotAnimRadius = 0;
   }
 }
@@ -632,18 +671,27 @@ void updateDisplay() {
       }
     }
 
-    // dim screen after being awake for 10 seconds (but not if pump is running)
-    if (!displayDimmed && !pumpOn && millis() - displayWakeMillis >= 10000) {
+    // dim screen after 10s awake (not while pump or extraction is running)
+    if (!displayDimmed && !pumpOn && !extractionActive &&
+        millis() - displayWakeMillis >= 10000) {
       setDisplayContrast(CONTRAST_DIM);
       displayDimmed = true;
     }
 
-    updatePumpOnTime();
+    updateShotAnimation();
 
     if (isShotTimerMode) {
+      // dominant clock: extraction time while the scale is timing (and
+      // connected), otherwise the pump time
+      float dominantSec = pumpRunSec;
+      bool showExtraction = extractionActive && bookooHasData;
+      if (showExtraction) {
+        dominantSec = (float)bookooElapsedMs / 1000.0f;
+      }
+
       // prepare time components once for this frame
       double secFractions, seconds;
-      secFractions = modf(pumpOnTimeSec, &seconds);
+      secFractions = modf(dominantSec, &seconds);
       secFractions = secFractions * 10;
       secFractions = static_cast<int>(secFractions);
 
@@ -659,7 +707,7 @@ void updateDisplay() {
       static uint8_t circleBuffer[bufferSize];
       static uint8_t timeBuffer[bufferSize];
 
-      // 1) Draw only the animated circle ring (2px wide) into the framebuffer
+      // Draw only the animated circle ring (2px wide) into the framebuffer
       display.clearDisplay();
       if (shotAnimRadius >= 2) {
         // outer ring
@@ -671,18 +719,56 @@ void updateDisplay() {
       }
       memcpy(circleBuffer, framebuffer, bufferSize);
 
-      // 2) Draw only the time digits into the framebuffer
       display.clearDisplay();
-      display.setTextSize(4);
-      display.setCursor(20, 14);
-      display.printf("%02.0f", seconds);
 
+      // Draw primary timevalue into the framebuffer
+      if (showExtraction) {
+        display.setTextSize(1);
+        display.setCursor(0, 2);
+        display.print("Extr:");
+
+        display.setTextSize(3);
+        display.setCursor(0, 14);
+        display.printf("%02.0f", seconds);
+
+        display.setTextSize(2);
+        display.printf("%1.0f", secFractions);
+        display.print("s");
+      } else {
+        display.setTextSize(4);
+        display.setCursor(20, 14);
+        display.printf("%02.0f", seconds);
+
+        display.setTextSize(2);
+        display.printf(".%1.0fs", secFractions);
+      }
+
+      // render small pump timer
+      if (showExtraction) {
+        display.setTextSize(1);
+        display.setCursor(SCREEN_WIDTH - 40, 2);
+        display.printf("Pump", pumpRunSec);
+
+        display.setCursor(SCREEN_WIDTH - 40, 14);
+        display.setTextSize(2);
+        display.printf("%1.0f", pumpRunSec);
+        display.setTextSize(1);
+        display.print("S");
+      }
+
+      // live weight, bottom center - placeholder when nothing is arriving
+      char weightBuf[12];
+      if (bookooHasData) {
+        snprintf(weightBuf, sizeof(weightBuf), "%0.1f g", bookooWeightG);
+      } else {
+        snprintf(weightBuf, sizeof(weightBuf), "--.- g");
+      }
       display.setTextSize(2);
-      display.printf(".%1.0f", secFractions);
-      display.print("s");
-      memcpy(timeBuffer, framebuffer, bufferSize);
+      display.setCursor((SCREEN_WIDTH - (int)strlen(weightBuf) * 12) / 2, 48);
+      display.print(weightBuf);
 
-      // 3) XOR circle and time into the final framebuffer
+      memcpy(timeBuffer, framebuffer, bufferSize);
+      // XOR circle and time into the final framebuffer
       for (size_t i = 0; i < bufferSize; i++) {
         framebuffer[i] = circleBuffer[i] ^ timeBuffer[i];
       }
@@ -696,21 +782,41 @@ void updateDisplay() {
       int dividerStartY = showingIp ? 10 : 0;
       display.drawLine(74, dividerStartY, 74, 63, SCREEN_WHITE);
 
-      // draw time seconds
+      // draw last shot/extraction time
       display.setTextSize(4);
       display.setCursor(display.width() / 2 - 1 + 17, 20);
       display.printf("%02.0f", lastShotTimeSec);
+
+      // scale rows, bottom right of the divider
+      display.setTextSize(1);
+      if (bookooLastShotValid) {
+        display.setCursor(76, 49);
+        display.print("Shot");
+        display.setCursor(100, 49);
+        display.printf("%0.0fs", bookooLastShotG);
+
+        display.setCursor(100, 57);
+        display.printf("%0.1f g", bookooLastShotG);
+      } else {
+        display.setCursor(90, 57);
+        if (bookooHasData) {
+          display.printf("%0.1f g", bookooWeightG);
+        } else {
+          display.print("--,--");
+        }
+      }
 
       // Machine not responding for >1s - show coffee animation and time since
       // last contact This acts as a "going to sleep" / connection lost
       // indicator
       long lastValueUpdate = millis() - lastSerialUpdatedValue;
       if (lastValueUpdate > 1000) {
-        // drawBitmap(x position, y position, bitmap data, bitmap width, bitmap
-        // height, color)
-        display.drawBitmap(0, 0, coffeeFrames[coffeeFrame], COFFEE_FRAME_WIDTH,
-                           COFFEE_FRAME_HEIGHT, SCREEN_WHITE);
-        coffeeFrame = (coffeeFrame + 1) % COFFEE_FRAME_COUNT;
+        // drawBitmap(x position, y position, bitmap data, bitmap width,
+        // bitmap height, color)
+        display.drawBitmap(0, 0, coffeeAnimationFrames[coffeeAnimationFrame],
+                           COFFEE_FRAME_WIDTH, COFFEE_FRAME_HEIGHT,
+                           SCREEN_WHITE);
+        coffeeAnimationFrame = (coffeeAnimationFrame + 1) % COFFEE_FRAME_COUNT;
 
         display.setTextSize(1);
         display.setCursor(display.width() - 20, 0);
@@ -731,10 +837,21 @@ void updateDisplay() {
 
         // draw machine prio mode state icon
         if (coffeeSteamMode == "C") {
-          display.drawBitmap(0, 0, coffeeIcon, COFFEE_ICON_WIDTH,
-                             COFFEE_ICON_HEIGHT, SCREEN_WHITE);
+          // drawBitmap(x position, y position, bitmap data, bitmap width,
+          // bitmap height, color)
+          display.drawBitmap(
+              0, 0, coffeeBeanAnimationFrames[coffeeBeanAnimationFrame],
+              COFFEE_BEAN_ANIMATION_WIDTH, COFFEE_BEAN_ANIMATION_HEIGHT,
+              SCREEN_WHITE);
+          // advance the bean only at its own pace, not every display update
+          if (millis() - lastBeanAdvanceMillis >= COFFEE_BEAN_FRAME_MS) {
+            lastBeanAdvanceMillis = millis();
+            coffeeBeanAnimationFrame = (coffeeBeanAnimationFrame + 1) %
+                                       COFFEE_BEAN_ANIMATION_FRAME_COUNT;
+          }
         } else if (coffeeSteamMode == "S") {
-          // display.drawBitmap(0, 0, modeUnknownIcon, MODE_UNKNOWN_ICON_WIDTH,
+          // display.drawBitmap(0, 0, modeUnknownIcon,
+          // MODE_UNKNOWN_ICON_WIDTH,
           //                    MODE_UNKNOWN_ICON_HEIGHT, SCREEN_WHITE);
         } else if (coffeeSteamMode == "X") {
           display.drawBitmap(0, 0, steamIcon, STEAM_ICON_WIDTH,

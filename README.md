@@ -14,6 +14,8 @@
 - OTA updates
 - case for sticking to back of machine
 - **MQTT integration** for home automation (see below for details)
+- **BLE scale integration**: live weight, extraction time and finished-shot
+  summary from a BOOKOO Themis scale via Bluetooth (see below for details)
 - screen‑saver: automatic dimming, sleep and daily white‑flash to reduce OLED burn‑in
 
 ## MQTT Integration
@@ -48,6 +50,34 @@ Assistant or any other MQTT consumer.
 
 For more info on the data format see the comments in `timer.ino`.
 
+## BOOKOO scale integration
+
+> disclaimer: this integration is vibe coded, but tested on real hardware.
+
+Connects over Bluetooth Low Energy to a BOOKOO Themis Ultra espresso scale
+(protocol: https://github.com/BooKooCode/OpenSource).
+
+- in shot timer mode the scale's extraction time becomes the dominant clock
+  (with pump time + live weight around it) until the scale finishes its shot
+- the dashboard shows live weight / scale timer, and after a shot the final
+  extraction time, pump time and weight
+- no extra library needed - BLE support ships with the esp32 arduino core (4.x)
+
+### flash size note
+
+enabling BLE grows the firmware past the default partition scheme's app
+size. compile and upload with the `min_spiffs` partition scheme:
+
+```sh
+arduino-cli compile -b esp32:esp32:esp32c3:PartitionScheme=min_spiffs timer/
+arduino-cli upload -b esp32:esp32:esp32c3:PartitionScheme=min_spiffs -p COM3 timer/
+```
+
+a device that still runs the default partition scheme must be flashed with
+the new scheme **once via usb** - partition tables can't be changed over
+OTA. afterwards OTA updates work normally (min_spiffs has two ~1.9MB app
+slots).
+
 ## Screen saver & burn‑in protection
 
 The firmware includes several features designed to slow OLED aging:
@@ -64,27 +94,92 @@ The firmware includes several features designed to slow OLED aging:
 
 - fork and rewrite of https://github.com/alexrus/marax_timer
 - written for ESP32C3
-- needs ArduinoOTA Dependency
 
 ## initial setup
 
-- install arduino IDE
-  - install board support for esp32c3 dev module
-- add WIFI credentials to code
-  - add `secrets.h` file and add the following:
+### 1. install arduino IDE (2.x)
 
-    ```C++
-    #define WIFI_SSID "your wifi name/ssid"
-    #define WIFI_PW "your wifi password"
-    #define OTA_PW "your password for OTA updates"
-    ```
+### 2. install ESP32 board support
 
-  - alternatively you can add your credentials directly in timer.ino but be sure to not commit them to git
+- add the espressif board index: **file → preferences → additional boards
+  manager URLs** → add
+  `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+- boards manager → install **"esp32" by Espressif Systems**, **version 4.x**
+- select board **"ESP32C3 Dev Module"**
+- ArduinoOTA is included in the esp32 core, no separate install needed
 
-- initial upload to devboard needs to happen via usb
-  build and upload the sketch
+### 3. install libraries (tools → manage libraries)
 
+install the following libraries from the library manager (latest version is
+fine for all of them, except where noted):
+
+| library (exact name) | author               | notes                                     |
+| -------------------- | -------------------- | ----------------------------------------- |
+| Adafruit GFX Library | Adafruit             | display graphics core                     |
+| Adafruit SH110X      | Adafruit             | SH1106 OLED driver                        |
+| Adafruit SSD1306     | Adafruit             | accept "install dependencies" (BusIO)     |
+| EspSoftwareSerial    | Dirk Kaar / P. Lerup | **v8.1.0 or newer** (ESP32-C3 support)    |
+| PubSubClient         | Nick O'Leary         | MQTT client (dependency of ArduinoHA)     |
+| BLE                  | Espressif (bundled)  | ships with esp32 core, nothing to install |
+
+two more libraries must be installed manually from github (run in the
+`libraries` folder of your arduino sketchbook):
+
+```powershell
+# Timer (scheduler for the periodic display/MQTT callbacks)
+# NOTE: the "Timer" library in the library manager is a DIFFERENT one, use this:
+git clone --depth 1 --branch v1.3 https://github.com/JChristensen/Timer.git Timer
+
+# ArduinoHA (MQTT / home assistant integration), not in the library manager:
+git clone --depth 1 --branch 2.1.0 https://github.com/dawidchyrzynski/arduino-home-assistant.git ArduinoHA
+```
+
+(alternatively download the release zips and extract them there)
+
+### 4. create `timer/secrets.h`
+
+copy `timer/secrets.h.sample` to `timer/secrets.h` and fill in your values:
+
+```C++
+#define WIFI_SSID "your wifi name/ssid"
+#define WIFI_PW "your wifi password"
+#define OTA_PW "your password for OTA updates"
+```
+
+for MQTT support also set the `MQTT_*` defines (set `MQTT_BROKER_ADDR` to
+`IPAddress(0, 0, 0, 0)` to disable MQTT - see "MQTT Integration" above).
+
+> `secrets.h` is git-ignored, so it must be recreated on every new
+> machine/clone. alternatively you can add your credentials directly in
+> timer.ino but be sure to not commit them to git.
+
+### 5. upload
+
+- set **tools → partition scheme → "Minimal SPIFFS (1.9MB APP with OTA)"**
+- the first upload to the devboard needs to happen via usb
+  build and upload the sketch - see [docs/FLASHING.md](docs/FLASHING.md)
+  for a step-by-step guide
+- afterwards updates work over-the-air (OTA)
 - connect
+
+### alternative: arduino-cli
+
+instead of the arduino IDE you can use `arduino-cli`:
+
+```sh
+# install the esp32 core (4.x)
+arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+# install the libraries (Timer + ArduinoHA must be installed manually, see above)
+arduino-cli lib install "Adafruit GFX Library" "Adafruit SH110X" "Adafruit SSD1306" EspSoftwareSerial PubSubClient
+
+# compile and upload (replace COM3 with your port)
+arduino-cli compile -b esp32:esp32:esp32c3 timer/
+arduino-cli upload -b esp32:esp32:esp32c3 -p COM3 timer/
+```
+
+you still need to create `timer/secrets.h` as described above.
 
 ## Hardware
 
